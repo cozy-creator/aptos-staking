@@ -1,0 +1,26 @@
+[package]
+name = 'Permissionless Stake Pool'
+version = '0.1.0'
+
+[dependencies.AptosFramework]
+git = 'https://github.com/aptos-labs/aptos-core'
+subdir = 'aptos-move/framework/aptos-framework'
+rev = 'devnet'
+
+[dependencies.AptosStdlib]
+git = 'https://github.com/aptos-labs/aptos-core'
+subdir = 'aptos-move/framework/aptos-stdlib'
+rev = 'devnet'
+
+[dependencies.MoveStdlib]
+git = 'https://github.com/aptos-labs/aptos-core'
+subdir = 'aptos-move/framework/move-stdlib'
+rev = 'devnet'
+
+
+[addresses]
+std = "0x1"
+aptos_std = "0x1"
+aptos_framework = "0x1"
+openrails = '0x222'
+stake_pool_address = '0x666'
