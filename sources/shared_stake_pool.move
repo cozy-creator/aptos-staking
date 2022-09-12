@@ -7,6 +7,7 @@
 module openrails::shared_stake_pool {
     use std::signer;
     use std::vector;
+    use std::error;
     use aptos_std::pool_u64;
     use aptos_std::simple_map::{Self, SimpleMap};
     use aptos_framework::coin::{Self, Coin};
@@ -16,6 +17,7 @@ module openrails::shared_stake_pool {
 
     const MAX_SHAREHOLDERS: u64 = 65536;
 
+    const EALREADY_REGISTERED: u64 = 0;
     const ENO_ZERO_DEPOSITS: u64 = 1;
     const EINSUFFICIENT_BALANCE: u64 = 2;
     const ENOT_AUTHORIZED_ADDRESS: u64 = 3;
@@ -296,12 +298,18 @@ module openrails::shared_stake_pool {
         stake::set_operator_with_cap(owner_cap, new_operator);
     }
 
-    // Initializer; only called upon depoyment
-    fun init_module(this: &signer) {
+    // TO DO: figure out voting
+    public entry fun change_voter() {}
+
+    // Call whenever you want to setup a stake pool
+    public entry fun initialize(this: &signer) {
         let addr = signer::address_of(this);
+        assert!(!exists<SharedStakePool>(addr), error::invalid_argument(EALREADY_REGISTERED));
+
         stake::initialize_stake_owner(this, 0, addr, addr);
         let owner_cap = stake::extract_owner_cap(this);
         let pool = pool_u64::create(MAX_SHAREHOLDERS);
+
         move_to(this, SharedStakePool {
             owner_cap,
             pool,
@@ -316,11 +324,14 @@ module openrails::shared_stake_pool {
             epoch: reconfiguration::current_epoch(),
             locked_until_secs: stake::get_lockup_secs(addr)
         });
+<<<<<<< HEAD
 
         move_to(this, OperatorInfo {
             operator_addr: addr,
             fee_bps: 5,
             accrued_apt: 0
         });
+=======
+>>>>>>> 949225b (change initialization function)
     }
 }
