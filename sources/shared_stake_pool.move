@@ -36,6 +36,15 @@ module openrails::shared_stake_pool {
         locked_until_secs: u64
     }
 
+    struct OperatorInfo has key {
+        /// The address of the operator of the stake pool
+        operator_addr: address,
+        /// Fee (in basis points) that is credited to the operator at every Epoch
+        fee_bps: u64,
+        /// How much APT the operator has accrued. When an operator wants to cash out this value is reset to 0.
+        accrued_apt: u64,
+    }
+
     // user entry functions
 
     public entry fun deposit(account: &signer, amount: u64) acquires SharedStakePool {
@@ -245,14 +254,36 @@ module openrails::shared_stake_pool {
         stake_pool.pending_inactive = simple_map::create<address, u64>();
     }
 
-    // TODO: take operator commission
+    /// This function must be called every epoch to update how much APT the operator is credited
+    fun update_operator_balance() acquires SharedStakePool, OperatorInfo {
+        let operator_addr = stake::get_operator(@stake_pool_address);
+        let stake_pool = borrow_global_mut<SharedStakePool>(@stake_pool_address);
 
-    fun collect_operator_commission() {}
+        // Assuming operator initially deposited 0 APT, their comission is a linear function on the accrued interest
+        let operator_info = borrow_global_mut<OperatorInfo>(operator_addr);
+        let operator_fee = operator_info.fee_bps;
+        let accrued_apt = operator_info.accrued_apt;
+        let interest = pool_u64::total_coins(&stake_pool.pool) / pool_u64::total_shares(&stake_pool.pool);
+        accrued_apt = (interest * operator_fee) - accrued_apt;
+    }
+
+    fun collect_operator_fee(operator_signer: &signer) acquires SharedStakePool, EpochTracker, OperatorInfo {
+        let operator_addr = stake::get_operator(@stake_pool_address);
+        assert!(signer::address_of(operator_signer) == operator_addr, ENOT_AUTHORIZED_ADDRESS);
+        let stake_pool = borrow_global_mut<SharedStakePool>(@stake_pool_address);
+        let operator_info = borrow_global<OperatorInfo>(operator_addr);
+        let accrued_apt = operator_info.accrued_apt;
+        withdraw(operator_signer, accrued_apt);
+    }
 
     // Commission changes are delayed and take effect on the next epoch
     // There are validators on Solana which will set their commission to 0% then raise it briefly to
     // 10% right before an epoch end. Our logic prevents this abusive behavior.
-    public fun change_operator_commission(){
+    public fun change_operator_fee(operator_signer: &signer, new_comission: u64) acquires OperatorInfo {
+        let operator_addr = stake::get_operator(@stake_pool_address);
+        assert!(signer::address_of(operator_signer) == operator_addr,ENOT_AUTHORIZED_ADDRESS);
+        let operator_fee = &mut borrow_global_mut<OperatorInfo>(operator_addr).fee_bps;
+        *operator_fee = new_comission;
     }
 
     // admin functions
@@ -284,6 +315,12 @@ module openrails::shared_stake_pool {
         move_to(this, EpochTracker {
             epoch: reconfiguration::current_epoch(),
             locked_until_secs: stake::get_lockup_secs(addr)
-        })
+        });
+
+        move_to(this, OperatorInfo {
+            operator_addr: addr,
+            fee_bps: 5,
+            accrued_apt: 0
+        });
     }
 }
