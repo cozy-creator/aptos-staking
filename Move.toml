@@ -1,21 +1,21 @@
 [package]
-name = 'Permissionless Stake Pool'
+name = 'SharedStakePool'
 version = '0.1.0'
 
 [dependencies.AptosFramework]
 git = 'https://github.com/aptos-labs/aptos-core'
 subdir = 'aptos-move/framework/aptos-framework'
-rev = 'devnet'
+rev = 'main'
 
 [dependencies.AptosStdlib]
 git = 'https://github.com/aptos-labs/aptos-core'
 subdir = 'aptos-move/framework/aptos-stdlib'
-rev = 'devnet'
+rev = 'main'
 
 [dependencies.MoveStdlib]
 git = 'https://github.com/aptos-labs/aptos-core'
 subdir = 'aptos-move/framework/move-stdlib'
-rev = 'devnet'
+rev = 'main'
 
 
 [addresses]
