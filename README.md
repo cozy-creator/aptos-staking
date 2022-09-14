@@ -6,9 +6,15 @@ This module is just an initial rough draft; do not use this in production yet.
 
 ### Why We Made This:
 
-The aptos_framework::stake module provides the basis for staking within Aptos. However, that module is designed only for a single-person; all the money within the StakePool belongs to whomever possess the owner_cap. That is to say, there is no way to trustlessly share a StakePool with someone else; whoever has the owner_cap could steal all your StakePool money easily.
+The aptos_framework::stake module provides the basis for staking within Aptos. However, that module is designed only for a single-person; all the money within the StakePool belongs to whomever possess the owner_cap. That is to say, there is no way to trustlessly share a StakePool with someone else; whoever has the owner_cap could steal all your StakePool money easily. Furthermore, the aptos_framework::stake module is permissioned; you cannot deposit stake into another person's stake pool, only the possessor of owner_cap can do that.
 
-Hence, why we created this SharedStakePool module; it is essentially a wrapper on top of StakePool. This module creates a StakePool, and then takes possession of its owner_cap, meaning it now has full control of the money within the StakePool. Whenever someone deposits, unlocks, or withdraws money, the SharedStakePool keeps track of how much each individual person is owed. It does this by maintaining an internal ledger, rather than by granting derivative tokens.
+Unlike Solana, Aptos creates a distinction between a "StakePool owner" and an "operator". StakePool owners bond money, while operators run the physical machines that validate the Aptos network, earning rewards every epoch dependent upon the operator peformance. Unfortunately, the aptos_framework::stake module has no built-in way to split epoch-rewards between the StakePool owner and the operator.
+
+For decentralization, Aptos needs permissionless, shared stake pools. ...oh and operators need to get paid.
+
+Hence, why we created this SharedStakePool module; it is essentially a wrapper on top of StakePool. This module creates a StakePool, and then takes possession of its owner_cap, meaning it now has full control of the money within the StakePool. Whenever someone deposits, unlocks, or withdraws money, the SharedStakePool keeps track of how much each individual person is owed. It does this by maintaining an internal ledger of each shareholder address, rather than by granting derivative tokens.
+
+Furthermore, it tracks rewards as they're earned, and pays an agreed-upon commission to the operator every epoch.
 
 ### This Module Is:
 
@@ -16,7 +22,13 @@ Hence, why we created this SharedStakePool module; it is essentially a wrapper o
 
 - Permissionless: anyone can deposit any amount of money within any StakePool and earn money; there is no authorization or KYC required. There is no way for any person or authority to exclude or censor you. Aside from the usual pseudonymous transaction record on the Aptos public ledger, you retain fully privacy.
 
-- Self-Sovereign: unlike Solana and Ethereum, a SharedStakePool is not bound to any one operator; if the members of the SharedStakePool are unhappy with the results of their operator, they can vote to fire them and replace them with a new operator. There is no need to migrate their stake to a new SharedStakePool. Furthermore, Shareholders can vote to adjust the compensation of their operator.
+- Self-Sovereign: if the members of the SharedStakePool are unhappy with the results of their operator, they can vote to fire them and replace them with a new operator. There is no need for each person to manually and individually migrate their stake to a new SharedStakePool. Furthermore, Shareholders can vote to adjust the compensation of their operator.
+
+### Who this module is for
+
+- Groups of APT holders: if you and a couple thousand of your friends are sitting on some APT bags, and you want to have your own Aptos validator, you can form your own SharedStakePool and hire an operator.
+
+- Independent validators: if you're an operator looking to collect enough stake to join Aptos' validator set, you can form a SharedStakePool so that individuals can deposit with you.
 
 ### How can you trust this module?
 
@@ -31,10 +43,20 @@ That being said, this is a core module whose safety is critical to Aptos. We wan
 
 Theoretically, a complete .spec file should ensure that this module is 100% impossible to hack; Move uses formal verification at the bytecode level to guarantee logical correctness. However... I'm not entirely convinced that this is fool-proof yet.
 
-Still; this is the greatest level of security guarantee any developer can ever make. This is a higher level of security guarantee than Ethereum or Solana can make.
+Still; this is the greatest level of security guarantee any developer can ever make. This is a higher level of security guarantee than any Ethereum smart-contract or Solana program can make.
 
 ### Upgrade Risk
 
 This module is designed to be upgradeable; it may need to be changed in the future to accommodate changes to how Aptos staking works, and new features may be added. Anyone using our module will benefit from these upgrades the moment they occur. However, this poses a risk; what if we replace our safe, well-functioning module with an insecure or malicious module? An upgrade has to be done carefully. Similar to other Aptos core modules, we'll do our upgrades using a governance vote of some sort.
 
 Details TBD.
+
+### Minor Details
+
+Any stake added to this SharedStakePool's StakePool must go through the SharedStakePool module; it's not possible to do deposits directly into the StakePool (you need the owner_cap, and this SharedStakePool possess the owner cap). If this bypass-deposit behavior were possible, the SharedStakePool would register this balance change as a reward distribution on the next epoch.
+
+This module has no direct way to observe reward distributions; in Aptos, on-chain modules cannot read historic data, even if it's a publicly viewable event. As a result this module calculates reward distributions manually.
+
+### Technical Aptos Details
+
+- Epochs are measured in seconds, rather than blocks produced.
