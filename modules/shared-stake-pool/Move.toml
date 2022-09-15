@@ -1,0 +1,24 @@
+[package]
+name = 'SharedStakePool'
+version = '0.2.0'
+
+[addresses]
+std = "0x1"
+aptos_std = "0x1"
+aptos_framework = "0x1"
+openrails = '0x222'
+
+[dependencies.AptosFramework]
+git = 'https://github.com/aptos-labs/aptos-core'
+subdir = 'aptos-move/framework/aptos-framework'
+rev = 'main'
+
+[dependencies.AptosStdlib]
+git = 'https://github.com/aptos-labs/aptos-core'
+subdir = 'aptos-move/framework/aptos-stdlib'
+rev = 'main'
+
+[dependencies.MoveStdlib]
+git = 'https://github.com/aptos-labs/aptos-core'
+subdir = 'aptos-move/framework/move-stdlib'
+rev = 'main'

@@ -59,4 +59,11 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 
 ### Technical Aptos Details
 
-- Epochs are measured in seconds, rather than blocks produced.
+- On Aptos, epochs are measured in seconds, not blocks produced.
+
+### TO DO STILL
+
+- Add full spec file
+- Add 100% unit test coverage
+- consider scenarios where the StakePool is inactive / pending_active, so that it's not part of the current validator set. Make sure everything is consistent
+- write governance sample module
