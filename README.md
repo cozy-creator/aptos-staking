@@ -2,7 +2,11 @@
 
 ### Disclaimer!
 
-This module is just an initial rough draft; do not use this in production yet.
+This module is just an initial rough draft; do not use this in mainnet or with any real monetary value until after it's passed a full security audit.
+
+### What This is
+
+This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make compsability easier.
 
 ### Why We Made This:
 
@@ -12,23 +16,25 @@ Unlike Solana, Aptos creates a distinction between a "StakePool owner" and an "o
 
 For decentralization, Aptos needs permissionless, shared stake pools. ...oh and operators need to get paid.
 
-Hence, why we created this SharedStakePool module; it is essentially a wrapper on top of StakePool. This module creates a StakePool, and then takes possession of its owner_cap, meaning it now has full control of the money within the StakePool. Whenever someone deposits, unlocks, or withdraws money, the SharedStakePool keeps track of how much each individual person is owed. It does this by maintaining an internal ledger of each shareholder address, rather than by granting derivative tokens.
+Hence, why we created this SharedStakePool module; it is essentially a wrapper on top of StakePool. This module creates a StakePool, and then takes possession of its owner_cap, meaning it now has full control of the money within the StakePool. Whenever someone deposits, unlocks, or withdraws money, the SharedStakePool keeps track of how much each individual person is owed by maintaining an internal ledge of stakeholders, not by granting derivative tokens.
 
 Furthermore, it tracks rewards as they're earned, and pays an agreed-upon commission to the operator every epoch.
 
 ### This Module Is:
 
-- Trustless: aside from trusting the logical soundness of this module and the Aptos network itself, and trusting any future upgrades made to the module, you do not have to trust the operator (validator), the module authors, or anyone else you are sharing a SharedStakePool with. They can never take your money. The worst a bad-operator can do is fail to produce blocks (hence earning you no interest). There are no slashing penalities yet on Aptos, but potentially in the future you could lose some of your staked money if your operator behaves maliciously and attacks the network.
+- Trustless: aside from trusting the logical soundness of this module and the Aptos network itself, and trusting any future upgrades OpenRails may make to the module, you do not have to trust the operator (validator), the module authors, or anyone else you are sharing a SharedStakePool with. They can never take your money. The worst a bad-operator can do is fail to produce blocks (hence earning you no interest). There are no slashing penalities yet on Aptos, but potentially in the future you could lose some of your staked money if your operator behaves maliciously and attacks the network.
 
 - Permissionless: anyone can deposit any amount of money within any StakePool and earn money; there is no authorization or KYC required. There is no way for any person or authority to exclude or censor you. Aside from the usual pseudonymous transaction record on the Aptos public ledger, you retain fully privacy.
 
-- Self-Sovereign: if the members of the SharedStakePool are unhappy with the results of their operator, they can vote to fire them and replace them with a new operator. There is no need for each person to manually and individually migrate their stake to a new SharedStakePool. Furthermore, Shareholders can vote to adjust the compensation of their operator.
+- Self-Sovereign: This program is designed with a modular governance_cap, which can be removed from the SharedStakePool's address, and placed in the custody of a governance module or with some trusted individuals. This allows every SharedStakePool to write its own custom governance structure. For example, if the members of the SharedStakePool are unhappy with the results of their operator, they can vote to fire them and replace them with a new operator. Furthermore, Stakeholders can vote to adjust the compensation of their operator. There is no need for each person to manually and individually migrate their stake to a new SharedStakePool, as in Solana.
 
 ### Who this module is for
 
-- Groups of APT holders: if you and a couple thousand of your friends are sitting on some APT bags, and you want to have your own Aptos validator, you can form your own SharedStakePool and hire an operator.
+- Groups of APT bag holders: if you and a couple thousand of your friends are sitting on some APT bags, and you want to run your own Aptos validator, you can form your own SharedStakePool and hire an operator.
 
 - Independent validators: if you're an operator looking to collect enough stake to join Aptos' validator set, you can form a SharedStakePool so that individuals can deposit with you.
+
+In both cases, you will need to meet the minimum stake requirements to join the validator set, which can be quite high.
 
 ### How can you trust this module?
 
@@ -51,6 +57,10 @@ This module is designed to be upgradeable; it may need to be changed in the futu
 
 Details TBD.
 
+### Network Risks
+
+Proof of stake networks can die when their token-emissions are insufficient to support their validator's costs of operation. It doesn't make sense for validators to pay more to operate a chain than they receive in rewards, so they quit. When enough validators quit, a network dies. This has only happened to smaller Cosmos-SDK chains so far, but I imagine in the future even larger chains may face the same fate if their tokens crater in value.
+
 ### Minor Details
 
 Any stake added to this SharedStakePool's StakePool must go through the SharedStakePool module; it's not possible to do deposits directly into the StakePool (you need the owner_cap, and this SharedStakePool possess the owner cap). If this bypass-deposit behavior were possible, the SharedStakePool would register this balance change as a reward distribution on the next epoch.
@@ -67,3 +77,5 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 - Add 100% unit test coverage
 - consider scenarios where the StakePool is inactive / pending_active, so that it's not part of the current validator set. Make sure everything is consistent
 - write governance sample module
+- Add events, in particular around unlocks, rewards, and payments
+- Typescript interfaces for external functions calling in
