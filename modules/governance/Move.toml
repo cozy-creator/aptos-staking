@@ -1,6 +1,12 @@
 [package]
-name = 'SharedStakePool'
+name = 'StakePoolGovernance'
 version = '0.1.0'
+
+[addresses]
+std = "0x1"
+aptos_std = "0x1"
+aptos_framework = "0x1"
+openrails = '0x222'
 
 [dependencies.AptosFramework]
 git = 'https://github.com/aptos-labs/aptos-core'
@@ -16,11 +22,3 @@ rev = 'main'
 git = 'https://github.com/aptos-labs/aptos-core'
 subdir = 'aptos-move/framework/move-stdlib'
 rev = 'main'
-
-
-[addresses]
-std = "0x1"
-aptos_std = "0x1"
-aptos_framework = "0x1"
-openrails = '0x222'
-stake_pool_address = '0x666'

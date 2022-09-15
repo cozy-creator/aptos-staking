@@ -1,12 +1,4 @@
-// Designed for single use, independent validators
-
-// TODO: add a customizable percentage the operator can take out from rewards
-
-// TODO: add specs
-
-// We need to consider; what if this StakePool is inactive? It may or may not always
-// be part of a validator set. This SharedStakePool will still operate, even if it's
-// not part of the current validator set
+// Designed for independent validators receiving stake from up to 65,536 stakeholders
 
 module openrails::shared_stake_pool {
     use std::signer;
@@ -43,7 +35,7 @@ module openrails::shared_stake_pool {
 
     struct SharedStakePool has key {
         owner_cap: stake::OwnerCapability,
-        pool: pool_u64::Pool,
+        stakeholders: pool_u64::Pool,
         pending_active: IterableMap,
         pending_inactive: IterableMap,
         inactive: IterableMap,
@@ -92,11 +84,11 @@ module openrails::shared_stake_pool {
 
         stake::initialize_stake_owner(this, 0, addr, addr);
         let owner_cap = stake::extract_owner_cap(this);
-        let pool = pool_u64::create(MAX_SHAREHOLDERS);
+        let stakeholders = pool_u64::create(MAX_SHAREHOLDERS);
 
         move_to(this, SharedStakePool {
             owner_cap,
-            pool,
+            stakeholders,
             pending_active: IterableMap {
                 map: simple_map::create<address, u64>(),
                 list: vector::empty<address>()
@@ -146,7 +138,7 @@ module openrails::shared_stake_pool {
         let value = coin::value<AptosCoin>(&coins);
         if (value == 0) {
             coin::destroy_zero<AptosCoin>(coins);
-            return;
+            return
         };
 
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
@@ -234,7 +226,7 @@ module openrails::shared_stake_pool {
             0
         };
 
-        let active = pool_u64::balance(&stake_pool.pool, addr) - pending_inactive;
+        let active = pool_u64::balance(&stake_pool.stakeholders, addr) - pending_inactive;
 
         (active, inactive, pending_active, pending_inactive)
     }
@@ -273,10 +265,10 @@ module openrails::shared_stake_pool {
 
         // update total coin balance; excluding operator_fee and pending_active_map stake, which
         // will be added below
-        pool_u64::update_total_coins(&mut stake_pool.pool, active + stake_pool.balances.pending_inactive - stake_pool.balances.pending_active - operator_fee);
+        pool_u64::update_total_coins(&mut stake_pool.stakeholders, active + stake_pool.balances.pending_inactive - stake_pool.balances.pending_active - operator_fee);
 
         // issue shares to pay the operator
-        pool_u64::buy_in(&mut stake_pool.pool, stake::get_operator(this), operator_fee);
+        pool_u64::buy_in(&mut stake_pool.stakeholders, stake::get_operator(this), operator_fee);
 
         // update our cached values
         stake_pool.operator_agreement.last_paid_secs = reconfiguration::last_reconfiguration_time() / MICRO_CONVERSION_FACTOR;
@@ -360,7 +352,7 @@ module openrails::shared_stake_pool {
     fun move_pending_active_to_active(stake_pool: &mut SharedStakePool) {
         let addresses = stake_pool.pending_active.list;
         let pending_active_map = stake_pool.pending_active.map;
-        let pool = &mut stake_pool.pool;
+        let stakeholders = &mut stake_pool.stakeholders;
 
         let i = 0;
         let len = vector::length(&addresses);
@@ -375,7 +367,7 @@ module openrails::shared_stake_pool {
             };
 
             // active balance will begin earning interest this epoch
-            pool_u64::buy_in(pool, *addr, new_active_balance);
+            pool_u64::buy_in(stakeholders, *addr, new_active_balance);
         };
         stake_pool.pending_active.map = simple_map::create<address, u64>();
         stake_pool.pending_active.list = vector::empty();
@@ -387,7 +379,7 @@ module openrails::shared_stake_pool {
         let addresses = stake_pool.pending_inactive.list;
         let pending_inactive_map = stake_pool.pending_inactive.map;
         let inactive_map = stake_pool.inactive.map;
-        let pool = &mut stake_pool.pool;
+        let stakeholders = &mut stake_pool.stakeholders;
 
         let i = 0;
         let len = vector::length(&addresses);
@@ -396,8 +388,8 @@ module openrails::shared_stake_pool {
             let pending_balance = simple_map::borrow(&mut pending_inactive_map, addr);
 
             // inactive stake no longer earns interest, and is considered redeemed
-            let shares = pool_u64::amount_to_shares(pool, *pending_balance);
-            let redeemed_coins = pool_u64::redeem_shares(pool, *addr, shares);
+            let shares = pool_u64::amount_to_shares(stakeholders, *pending_balance);
+            let redeemed_coins = pool_u64::redeem_shares(stakeholders, *addr, shares);
 
             if (simple_map::contains_key(&inactive_map, addr)) {
                 let inactive_balance = simple_map::borrow_mut(&mut inactive_map, addr);
