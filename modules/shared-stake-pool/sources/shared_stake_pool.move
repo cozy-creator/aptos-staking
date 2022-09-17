@@ -5,12 +5,13 @@ module openrails::shared_stake_pool {
     use std::vector;
     use std::error;
     use std::option::{Self, Option};
-    use aptos_std::pool_u64;
+    use openrails::pool_u64;
     use aptos_std::simple_map::{Self, SimpleMap};
     use aptos_framework::coin::{Self, Coin};
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_framework::stake;
     use aptos_framework::reconfiguration;
+    use aptos_framework::timestamp;
 
     const MAX_SHAREHOLDERS: u64 = 65536;
     // Seconds per month, assuming 1 month = 30 days
@@ -144,8 +145,16 @@ module openrails::shared_stake_pool {
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
         stake::add_stake_with_cap(&stake_pool.owner_cap, coins);
 
-        add_to_iterable_map(&mut stake_pool.pending_active, addr, value);
-        stake_pool.balances.pending_active = stake_pool.balances.pending_active + value;
+        if (!is_active_validator(*&stake_pool.validator_status)) {
+            // balance goes immediately into active
+            pool_u64::buy_in(&mut stake_pool.stakeholders, addr, value);
+            stake_pool.balances.active = stake_pool.balances.active + value;
+        }
+        else {
+            // balance goes into pending_active
+            add_to_iterable_map(&mut stake_pool.pending_active, addr, value);
+            stake_pool.balances.pending_active = stake_pool.balances.pending_active + value;
+        }
     }
 
     public entry fun unlock(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool {
@@ -160,6 +169,8 @@ module openrails::shared_stake_pool {
         add_to_iterable_map(&mut stake_pool.pending_inactive, addr, amount);
         stake_pool.balances.pending_inactive = stake_pool.balances.pending_inactive + amount;
         stake_pool.balances.active = stake_pool.balances.active - amount;
+        // Note: even if our validator is not active, aptos_framework::stake will still move from
+        // pending_inactive to active
     }
 
     public entry fun cancel_unlock(account: &signer, this: address, amount: u64) acquires SharedStakePool, EpochTracker {
@@ -189,9 +200,37 @@ module openrails::shared_stake_pool {
 
         let addr = signer::address_of(account);
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
+        let epoch_tracker = borrow_global_mut<EpochTracker>(this);
+
+        let stake_pool: SharedStakePool = freeze(stake_pool);
+
+        if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE) {
+            // In this edge-case, the stake::withdraw_with_cap function will move everything out of
+            // pending_inactive. We account for this here.
+            if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs && stake_pool.balances.pending_inactive > 0) {
+                // move_pending_inactive_to_inactive(stake_pool);
+            };
+
+            // In this case, we can move stake straight from active -> pending_inactive -> inactive -> withdrawn
+            if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
+                // let _stake_pool = freeze(stake_pool);
+                // let (_active, inactive, _, _) = get_balances_for_address(this, addr);
+                // we only dip into a user's active balance if their inactive balance is insufficent
+                // if (amount > inactive) {
+                    freeze(stake_pool);
+                    unlock(account, this, amount);
+                    // let stake_pool = borrow_global_mut<SharedStakePool>(this);
+                    // move_pending_inactive_to_inactive(stake_pool);
+                // };
+            };
+        };
+
         assert!(simple_map::contains_key(&stake_pool.inactive.map, &addr), error::not_found(EACCOUNT_NOT_FOUND));
 
         let withdrawable_balance = simple_map::borrow_mut(&mut stake_pool.inactive.map, &addr);
+        // Note: aptos_framework::stake will set amount = withdrawable_balance in this case, however
+        // I think this behavior is wrong. If another module asks for 1000 APT but they can only withdraw
+        // 500, it's best to give them an error rather than giving them 500.
         assert!(*withdrawable_balance >= amount, error::invalid_argument(EINSUFFICIENT_BALANCE));
 
         subtract_from_iterable_map(&mut stake_pool.inactive, addr, amount);
@@ -203,7 +242,7 @@ module openrails::shared_stake_pool {
 
     public fun get_balances_for_address(this: address, addr: address): (u64, u64, u64, u64) acquires EpochTracker, SharedStakePool {
         crank_on_new_epoch(this);
-        let stake_pool = borrow_global_mut<SharedStakePool>(this);
+        let stake_pool = borrow_global<SharedStakePool>(this);
 
         let pending_inactive = if (simple_map::contains_key(&stake_pool.pending_inactive.map, &addr)) {
             *simple_map::borrow(&stake_pool.pending_inactive.map, &addr)
@@ -287,7 +326,7 @@ module openrails::shared_stake_pool {
         // created an issue here to resolve this: https://github.com/aptos-labs/aptos-core/issues/4080
         // However this SharedStakePool will still needs to track all this info manually, 
         // because on-chain functions can't read on-chain events, as ridicilous as that sounds...
-        // I added the pending_inactive check as a double-measure; the check should always suffice
+        // I added the pending_inactive check as a double-measure
         if ((locked_until_secs > epoch_tracker.locked_until_secs) && (pending_inactive == 0)) {
             epoch_tracker.locked_until_secs = locked_until_secs;
             move_pending_inactive_to_inactive(stake_pool);
@@ -368,6 +407,7 @@ module openrails::shared_stake_pool {
 
             // active balance will begin earning interest this epoch
             pool_u64::buy_in(stakeholders, *addr, new_active_balance);
+            stake_pool.balances.active = stake_pool.balances.active + new_active_balance;
         };
         stake_pool.pending_active.map = simple_map::create<address, u64>();
         stake_pool.pending_active.list = vector::empty();
@@ -397,7 +437,9 @@ module openrails::shared_stake_pool {
             }
             else {
                 simple_map::add(&mut inactive_map, *addr, redeemed_coins);
-            }
+            };
+
+            stake_pool.balances.inactive = stake_pool.balances.inactive + redeemed_coins;
         };
         stake_pool.pending_inactive.map = simple_map::create<address, u64>();
         stake_pool.pending_inactive.list = vector::empty();
@@ -524,7 +566,16 @@ module openrails::shared_stake_pool {
         };
     }
 
+    fun is_active_validator(status: u64): bool {
+        if (status == VALIDATOR_STATUS_PENDING_ACTIVE || status == VALIDATOR_STATUS_INACTIVE) {
+            return false
+        };
+
+        return true
+    }
+
     // TO DO: query a switchboard oracle to find the USD price at the given timestamp
+    // We should also add in the option to swap rewards into other coins
     fun convert_usd_to_apt(amount: u64, _time: u64): u64 {
         amount
     }
