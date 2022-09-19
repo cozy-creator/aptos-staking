@@ -169,8 +169,8 @@ module openrails::shared_stake_pool {
         add_to_iterable_map(&mut stake_pool.pending_inactive, addr, amount);
         stake_pool.balances.pending_inactive = stake_pool.balances.pending_inactive + amount;
         stake_pool.balances.active = stake_pool.balances.active - amount;
-        // Note: even if our validator is not active, aptos_framework::stake will still move from
-        // pending_inactive to active
+        // Note: even if our validator is not active, aptos_framework::stake will still move stake from
+        // active to pending_inactive, rather than straight to inactive
     }
 
     public entry fun cancel_unlock(account: &signer, this: address, amount: u64) acquires SharedStakePool, EpochTracker {
@@ -199,30 +199,30 @@ module openrails::shared_stake_pool {
         };
 
         let addr = signer::address_of(account);
-        let stake_pool = borrow_global_mut<SharedStakePool>(this);
-        let epoch_tracker = borrow_global_mut<EpochTracker>(this);
-
-        let stake_pool: SharedStakePool = freeze(stake_pool);
+        let stake_pool = borrow_global<SharedStakePool>(this);
+        let epoch_tracker = borrow_global<EpochTracker>(this);
 
         if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE) {
-            // In this edge-case, the stake::withdraw_with_cap function will move everything out of
-            // pending_inactive. We account for this here.
-            if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs && stake_pool.balances.pending_inactive > 0) {
-                // move_pending_inactive_to_inactive(stake_pool);
-            };
-
             // In this case, we can move stake straight from active -> pending_inactive -> inactive -> withdrawn
             if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
-                // let _stake_pool = freeze(stake_pool);
-                // let (_active, inactive, _, _) = get_balances_for_address(this, addr);
-                // we only dip into a user's active balance if their inactive balance is insufficent
-                // if (amount > inactive) {
-                    freeze(stake_pool);
+                let (_active, inactive, _, _) = get_balances_for_address(this, addr);
+
+                //we only dip into a user's active balance if their inactive balance is insufficent
+                if (amount > inactive) {
                     unlock(account, this, amount);
-                    // let stake_pool = borrow_global_mut<SharedStakePool>(this);
-                    // move_pending_inactive_to_inactive(stake_pool);
-                // };
+                };
             };
+        };
+
+        // We have to re-acquire these here, as the above functions may have modified them
+        // This is a global storage protection rule Move puts into place
+        let stake_pool = borrow_global_mut<SharedStakePool>(this);
+        let epoch_tracker = borrow_global<EpochTracker>(this);
+
+        // In this edge-case, the stake::withdraw_with_cap function we call below will move
+        // everything out of pending_inactive. We account for this here.
+        if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE && timestamp::now_seconds() >= epoch_tracker.locked_until_secs && stake_pool.balances.pending_inactive > 0) {
+                move_pending_inactive_to_inactive(stake_pool);
         };
 
         assert!(simple_map::contains_key(&stake_pool.inactive.map, &addr), error::not_found(EACCOUNT_NOT_FOUND));

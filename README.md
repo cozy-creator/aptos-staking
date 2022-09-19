@@ -79,3 +79,26 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 - write governance sample module
 - Add events, in particular around unlocks, rewards, and payments
 - Typescript interfaces for external functions calling in
+- export the shareholder table such that it can be used in governance
+- operators should be able to be paid in stablecoins or other coins if they prefer
+
+### How to publish
+
+- Go into the module you want to use (i.e., modules/shared-stake-pools)
+- run `aptos init`. This will generate a new random keypair for you and fund it with tokens initially. You may need to request additional tokens from the faucet for publishing large modules
+- run `aptos account list` and find your authentication key
+- run `aptos move compile --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c` or whatever your authentication key was that was generated above
+- similarly, you can do `aptos move publish --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c`
+
+### How to use
+
+- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::initialize --max-gas 1000`
+- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::deposit --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200 --max-gas 1000`
+-
+
+### Gas Cost Benchmarks
+
+- publish the module: 2,199
+- initialize a stake pool: 168
+- deposit into stake pool: 157
+- turn the crank: ???
