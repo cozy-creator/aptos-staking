@@ -46,6 +46,10 @@ module openrails::shared_stake_pool {
         validator_status: u64
     }
 
+    struct StakePoolLookup has key {
+
+    }
+
     struct IterableMap has store, drop {
         map: SimpleMap<address, u64>,
         list: vector<address>
@@ -268,6 +272,20 @@ module openrails::shared_stake_pool {
         let active = pool_u64::balance(&stake_pool.stakeholders, addr) - pending_inactive;
 
         (active, inactive, pending_active, pending_inactive)
+    }
+
+    public fun get_withdrawable_balance(this: address, addr: address): u64 acquires EpochTracker, SharedStakePool {
+        let (active, inactive, _pending_active, pending_inactive) = get_balances_for_address(this, addr);
+
+        let epoch_tracker = borrow_global<EpochTracker>(this);
+        let status = *&borrow_global_mut<SharedStakePool>(this).status;
+        if (status == VALIDATOR_STATUS_INACTIVE) {
+            if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
+                active + inactive + pending_inactive
+            };
+        } else {
+            inactive
+        }
     }
 
 
@@ -512,6 +530,7 @@ module openrails::shared_stake_pool {
         stake::set_delegated_voter_with_cap(&stake_pool.owner_cap, new_voter);
     }
 
+    // the signing account must own the GovernanceCapability for this to work
     public entry fun increase_lockup(account: &signer) acquires GovernanceCapability, SharedStakePool, EpochTracker {
         let addr = signer::address_of(account);
         assert!(exists<GovernanceCapability>(addr), error::not_found(EGOVERNANCE_NOT_FOUND));
@@ -566,7 +585,7 @@ module openrails::shared_stake_pool {
         };
     }
 
-    fun is_active_validator(status: u64): bool {
+    public fun is_active_validator(status: u64): bool {
         if (status == VALIDATOR_STATUS_PENDING_ACTIVE || status == VALIDATOR_STATUS_INACTIVE) {
             return false
         };
@@ -576,7 +595,7 @@ module openrails::shared_stake_pool {
 
     // TO DO: query a switchboard oracle to find the USD price at the given timestamp
     // We should also add in the option to swap rewards into other coins
-    fun convert_usd_to_apt(amount: u64, _time: u64): u64 {
+    public fun convert_usd_to_apt(amount: u64, _time: u64): u64 {
         amount
     }
 
