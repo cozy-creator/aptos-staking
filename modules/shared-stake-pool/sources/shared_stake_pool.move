@@ -84,49 +84,53 @@ module openrails::shared_stake_pool {
         assert!(!exists<SharedStakePool>(addr), error::invalid_argument(EALREADY_REGISTERED));
 
         stake::initialize_stake_owner(this, 0, addr, addr);
-        let owner_cap = stake::extract_owner_cap(this);
-        let stakeholders = pool_u64::create(MAX_SHAREHOLDERS);
 
-        move_to(this, SharedStakePool {
-            owner_cap,
-            stakeholders,
-            pending_active: IterableMap {
-                map: simple_map::create<address, u64>(),
-                list: vector::empty<address>()
-            },
-            pending_inactive: IterableMap {
-                map: simple_map::create<address, u64>(),
-                list: vector::empty<address>()
-            },
-            inactive: IterableMap {
-                map: simple_map::create<address, u64>(),
-                list: vector::empty<address>()
-            },
-            balances: Balances {
-                active: 0,
-                inactive: 0,
-                pending_active: 0,
-                pending_inactive: 0,
-            },
-            operator_agreement: OperatorAgreement {
-                operator: addr,
-                monthly_fee_usd: 0,
-                performance_fee_bps: 500,
-                last_paid_secs: 0,
-                epoch_effective: 0
-            },
-            pending_operator_agreement: option::none(),
-            validator_status: VALIDATOR_STATUS_INACTIVE
-        });
-
-        move_to(this, EpochTracker {
-            epoch: reconfiguration::current_epoch(),
-            locked_until_secs: stake::get_lockup_secs(addr)
-        });
-
-        move_to(this, GovernanceCapability {
-            shared_pool_address: addr
-        });
+        // Initialize validator config.
+        stake::rotate_consensus_key(this, addr, CONSENSUS_KEY_2, CONSENSUS_POP_2);
+        
+        // let owner_cap = stake::extract_owner_cap(this);
+        // let stakeholders = pool_u64::create(MAX_SHAREHOLDERS);
+        //
+        // move_to(this, SharedStakePool {
+        //     owner_cap,
+        //     stakeholders,
+        //     pending_active: IterableMap {
+        //         map: simple_map::create<address, u64>(),
+        //         list: vector::empty<address>()
+        //     },
+        //     pending_inactive: IterableMap {
+        //         map: simple_map::create<address, u64>(),
+        //         list: vector::empty<address>()
+        //     },
+        //     inactive: IterableMap {
+        //         map: simple_map::create<address, u64>(),
+        //         list: vector::empty<address>()
+        //     },
+        //     balances: Balances {
+        //         active: 0,
+        //         inactive: 0,
+        //         pending_active: 0,
+        //         pending_inactive: 0,
+        //     },
+        //     operator_agreement: OperatorAgreement {
+        //         operator: addr,
+        //         monthly_fee_usd: 0,
+        //         performance_fee_bps: 500,
+        //         last_paid_secs: 0,
+        //         epoch_effective: 0
+        //     },
+        //     pending_operator_agreement: option::none(),
+        //     validator_status: VALIDATOR_STATUS_INACTIVE
+        // });
+        //
+        // move_to(this, EpochTracker {
+        //     epoch: reconfiguration::current_epoch(),
+        //     locked_until_secs: stake::get_lockup_secs(addr)
+        // });
+        //
+        // move_to(this, GovernanceCapability {
+        //     shared_pool_address: addr
+        // });
     }
 
     public entry fun deposit(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool {
@@ -319,12 +323,12 @@ module openrails::shared_stake_pool {
         let locked_until_secs = stake::get_lockup_secs(this);
         // This timestamp going up means our validator's lockup was renewed, so an unlock event
         // occurred.
-        // In order for this to be logically sound, we need to make sure that all IncreaseLockupEvent 
+        // In order for this to be logically sound, we need to make sure that all IncreaseLockupEvent
         // events go through our module, so we can adjust our EpochTracker.locked_until_secs accordinginly.
         //
         // TO DO: The aptos_framework::stake module really needs to include its own stake unlock event. I
         // created an issue here to resolve this: https://github.com/aptos-labs/aptos-core/issues/4080
-        // However this SharedStakePool will still needs to track all this info manually, 
+        // However this SharedStakePool will still needs to track all this info manually,
         // because on-chain functions can't read on-chain events, as ridicilous as that sounds...
         // I added the pending_inactive check as a double-measure
         if ((locked_until_secs > epoch_tracker.locked_until_secs) && (pending_inactive == 0)) {
@@ -361,7 +365,7 @@ module openrails::shared_stake_pool {
         let current_status = stake::get_validator_state(this);
         let epoch_start_secs = reconfiguration::last_reconfiguration_time() / MICRO_CONVERSION_FACTOR;
         let operator_fee = 0;
-        
+
         // we just joined the validator set; mark to pay the operator on next time stamp
         if ((previous_status == VALIDATOR_STATUS_PENDING_ACTIVE || previous_status == VALIDATOR_STATUS_INACTIVE) && (current_status == VALIDATOR_STATUS_ACTIVE || current_status == VALIDATOR_STATUS_PENDING_INACTIVE)) {
             // do nothing
@@ -377,14 +381,14 @@ module openrails::shared_stake_pool {
             };
 
             let fixed_fee_usd = ((operator_agreement.monthly_fee_usd as u128) * (pay_period_secs as u128) / (MONTH_SECS as u128) as u64);
-            let _fixed_fee_apt = convert_usd_to_apt(fixed_fee_usd, epoch_start_secs);
+            let _fixed_fee_apt = convert_usd_to_apt((fixed_fee_usd as u64), epoch_start_secs);
             let incentive_fee_apt = ((rewards_amount as u128) * (operator_agreement.performance_fee_bps as u128) / 10000 as u64);
 
             // TO DO: when usd_to_apt is implemented, start including the fixed fee as well
             operator_fee = incentive_fee_apt; // + _fixed_fee_apt;
         };
 
-        operator_fee
+        (operator_fee as u64)
     }
 
     // crank sub-function. Cannot abort
@@ -521,7 +525,7 @@ module openrails::shared_stake_pool {
 
     public fun increase_lockup_with_cap(governance_cap: &GovernanceCapability) acquires SharedStakePool, EpochTracker {
         let this = governance_cap.shared_pool_address;
-        let stake_pool = borrow_global<SharedStakePool>(this); 
+        let stake_pool = borrow_global<SharedStakePool>(this);
         stake::increase_lockup_with_cap(&stake_pool.owner_cap);
 
         // crank_on_new_epoch uses increases in the locked_until_secs as an indicator that an unlock occurred
@@ -579,5 +583,23 @@ module openrails::shared_stake_pool {
     fun convert_usd_to_apt(amount: u64, _time: u64): u64 {
         amount
     }
+
+    // Tests >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+
+    #[test(admin = @openrails)]
+    fun end_to_end(admin: &signer) {
+        initialize(admin)
+    }
+
+    #[test_only]
+    const CONSENSUS_KEY_1: vector<u8> = x"8a54b92288d4ba5073d3a52e80cc00ae9fbbc1cc5b433b46089b7804c38a76f00fc64746c7685ee628fc2d0b929c2294";
+    #[test_only]
+    const CONSENSUS_POP_1: vector<u8> = x"a9d6c1f1270f2d1454c89a83a4099f813a56dc7db55591d46aa4e6ccae7898b234029ba7052f18755e6fa5e6b73e235f14efc4e2eb402ca2b8f56bad69f965fc11b7b25eb1c95a06f83ddfd023eac4559b6582696cfea97b227f4ce5bdfdfed0";
+
+    #[test_only]
+    const CONSENSUS_KEY_2: vector<u8> = x"a344eb437bcd8096384206e1be9c80be3893fd7fdf867acce5a048e5b1546028bdac4caf419413fd16d4d6a609e0b0a3";
+    #[test_only]
+    const CONSENSUS_POP_2: vector<u8> = x"909d3a378ad5c17faf89f7a2062888100027eda18215c7735f917a4843cd41328b42fa4242e36dedb04432af14608973150acbff0c5d3f325ba04b287be9747398769a91d4244689cfa9c535a5a4d67073ee22090d5ab0a88ab8d2ff680e991e";
 
 }
