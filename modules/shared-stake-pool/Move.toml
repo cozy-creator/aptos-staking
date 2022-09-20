@@ -7,6 +7,7 @@ std = "0x1"
 aptos_std = "0x1"
 aptos_framework = "0x1"
 openrails = '0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70'
+test_user = '0x333'
 # openrails = "0x013f0ec8bddb23df2804aa24ff2b807ec937e29f75e25f17cb12a52fb91e921a"
 
 [dependencies.AptosFramework]
