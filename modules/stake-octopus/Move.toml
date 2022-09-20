@@ -1,0 +1,16 @@
+[package]
+name = 'StakeOctopus'
+version = '0.1.0'
+license = "MIT"
+authors = ["Paul Fidika", "Shayan Sanjideh"]
+
+[addresses]
+std = "0x1"
+aptos_std = "0x1"
+aptos_framework = "0x1"
+# openrails = '52b8afb88b662a18cba558322310509235e8e9753672cf69f7eca3bde38b929d'
+openrails = "_"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "main" }
+SharedStakePool = { git = "https://github.com/open-rails/aptos-shared-stake-pool.git", subdir = "modules/shared-stake-pool", rev = "master" }
