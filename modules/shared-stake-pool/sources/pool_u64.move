@@ -257,279 +257,279 @@ module openrails::pool_u64 {
         } = pool;
     }
 
-    #[test]
-    public entry fun test_buy_in_and_redeem() {
-        let pool = create(5);
-
-        // Shareholders 1 and 2 buy in first.
-        buy_in(&mut pool, @1, 1000);
-        buy_in(&mut pool, @2, 2000);
-        assert!(shareholders_count(&pool) == 2, 0);
-        assert!(total_coins(&pool) == 3000, 1);
-        assert!(total_shares(&pool) == 3000, 2);
-        assert!(shares(&pool, @1) == 1000, 3);
-        assert!(shares(&pool, @2) == 2000, 4);
-        assert!(balance(&pool, @1) == 1000, 5);
-        assert!(balance(&pool, @2) == 2000, 6);
-
-        // Pool increases in value.
-        update_total_coins(&mut pool, 5000);
-        assert!(shares(&pool, @1) == 1000, 7);
-        assert!(shares(&pool, @2) == 2000, 8);
-        let expected_balance_1 = 1000 * 5000 / 3000;
-        assert!(balance(&pool, @1) == expected_balance_1, 9);
-        let expected_balance_2 = 2000 * 5000 / 3000;
-        assert!(balance(&pool, @2) == expected_balance_2, 10);
-
-        // Shareholder 3 buys in into the 5000-coin pool with 1000 coins. There are 3000 existing shares.
-        let expected_shares = 1000 * 3000 / 5000;
-        buy_in(&mut pool, @3, 1000);
-        assert!(shares(&pool, @3) == expected_shares, 11);
-        assert!(balance(&pool, @3) == 1000, 12);
-
-        // Pool increases more in value.
-        update_total_coins(&mut pool, 8000);
-
-        // Shareholders 1 and 2 redeem.
-        let all_shares = 3000 + expected_shares;
-        assert!(total_shares(&pool) == all_shares, 13);
-        let expected_value_per_500_shares = 500 * 8000 / all_shares;
-        assert!(redeem_shares(&mut pool, @1, 500) == expected_value_per_500_shares, 14);
-        assert!(redeem_shares(&mut pool, @1, 500) == expected_value_per_500_shares, 15);
-        assert!(redeem_shares(&mut pool, @2, 2000) == expected_value_per_500_shares * 4, 16);
-
-        // Due to a very small rounding error of 1, shareholder 3 actually has 1 more coin.
-        let shareholder_3_balance = expected_value_per_500_shares * 6 / 5 + 1;
-        assert!(balance(&pool, @3) == shareholder_3_balance, 17);
-        assert!(total_coins(&pool) == shareholder_3_balance, 18);
-        assert!(shareholders_count(&pool) == 1, 19);
-        let num_shares_3 = shares(&pool, @3);
-        assert!(redeem_shares(&mut pool, @3, num_shares_3) == shareholder_3_balance, 20);
-
-        // Nothing left.
-        assert!(shareholders_count(&pool) == 0, 21);
-        destroy_empty(pool);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 196611)]
-    public entry fun test_destroy_empty_should_fail_if_not_empty() {
-        let pool = create(1);
-        update_total_coins(&mut pool, 100);
-        destroy_empty(pool);
-    }
-
-    #[test]
-    public entry fun test_buy_in_and_redeem_large_numbers() {
-        let pool = create(2);
-        let half_max_u64 = MAX_U64 / 2;
-        let shares_1 = buy_in(&mut pool, @1, half_max_u64);
-        assert!(shares_1 == half_max_u64, 0);
-        let shares_2 = buy_in(&mut pool, @2, half_max_u64 + 1);
-        assert!(shares_2 == half_max_u64 + 1, 1);
-        assert!(total_shares(&pool) == MAX_U64, 2);
-        assert!(total_coins(&pool) == MAX_U64, 3);
-        assert!(redeem_shares(&mut pool, @1, shares_1) == half_max_u64, 4);
-        assert!(redeem_shares(&mut pool, @2, shares_2) == half_max_u64 + 1, 5);
-        destroy_empty(pool);
-    }
-
-    #[test]
-    public entry fun test_buy_in_and_redeem_large_numbers_with_scaling_factor() {
-        let pool = create_with_scaling_factor(2, 100);
-        let shares = buy_in(&mut pool, @1, MAX_U64 / 100);
-        assert!(total_shares(&pool) == MAX_U64 / 100, 0);
-        assert!(total_coins(&pool) == MAX_U64 / 100, 1);
-        assert!(redeem_shares(&mut pool, @1, shares) == MAX_U64 / 100, 2);
-        destroy_empty(pool);
-    }
-
-    #[test]
-    public entry fun test_buy_in_zero_amount() {
-        let pool = create(2);
-        buy_in(&mut pool, @1, 100);
-        assert!(buy_in(&mut pool, @2, 0) == 0, 0);
-        assert!(total_shares(&pool) == shares(&pool, @1), 1);
-        assert!(shareholders_count(&pool) == 1, 2);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_buy_in_with_small_coins_amount() {
-        let pool = create(2);
-        // Shareholder 1 buys in with 1e17 coins.
-        buy_in(&mut pool, @1, 100000000000000000);
-        // Shareholder 2 buys in with a very small amount.
-        assert!(buy_in(&mut pool, @2, 1) == 1, 0);
-        // Pool's total coins increases by 20%. Shareholder 2 shouldn't see any actual balance increase as it gets
-        // rounded down.
-        let total_coins = total_coins(&pool);
-        update_total_coins(&mut pool, total_coins * 6 / 5);
-        // Minus 1 due to rounding error.
-        assert!(balance(&pool, @1) == 100000000000000000 * 6 / 5 - 1, 1);
-        assert!(balance(&pool, @2) == 1, 2);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_add_zero_shares_should_not_add_shareholder() {
-        let pool = create(1);
-        update_total_coins(&mut pool, 1000);
-        assert!(add_shares(&mut pool, @1, 0) == 0, 0);
-        assert!(shareholders_count(&pool) == 0, 1);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_add_zero_shares_returns_existing_number_of_shares() {
-        let pool = create(1);
-        update_total_coins(&mut pool, 1000);
-        add_shares(&mut pool, @1, 1);
-        assert!(shares(&pool, @1) == add_shares(&mut pool, @1, 0), 0);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_add_shares_existing_shareholder() {
-        let pool = create(1);
-        update_total_coins(&mut pool, 1000);
-        add_shares(&mut pool, @1, 1);
-        add_shares(&mut pool, @1, 2);
-        assert!(shares(&mut pool, @1) == 3, 0);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_add_shares_new_shareholder() {
-        let pool = create(2);
-        update_total_coins(&mut pool, 1000);
-        add_shares(&mut pool, @1, 1);
-        add_shares(&mut pool, @2, 2);
-        assert!(shares(&mut pool, @1) == 1, 0);
-        assert!(shares(&mut pool, @2) == 2, 1);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 196610)]
-    public entry fun test_add_shares_should_enforce_shareholder_limit() {
-        let pool = create(2);
-        add_shares(&mut pool, @1, 1);
-        add_shares(&mut pool, @2, 2);
-        add_shares(&mut pool, @3, 2);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_add_shares_should_work_after_reducing_shareholders_below_limit() {
-        let pool = create(3);
-        add_shares(&mut pool, @1, 1);
-        add_shares(&mut pool, @2, 2);
-        deduct_shares(&mut pool, @2, 2);
-        add_shares(&mut pool, @3, 3);
-        assert!(shares(&pool, @3) == 3, 0);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 65537)]
-    public entry fun test_redeem_shares_non_existent_shareholder() {
-        let pool = create(1);
-        add_shares(&mut pool, @1, 1);
-        redeem_shares(&mut pool, @2, 1);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 65540)]
-    public entry fun test_redeem_shares_insufficient_shares() {
-        let pool = create(1);
-        add_shares(&mut pool, @1, 1);
-        redeem_shares(&mut pool, @1, 2);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_redeem_small_number_of_shares() {
-        let pool = create(2);
-        // 1e17 shares and coins.
-        buy_in(&mut pool, @1, 100000000000000000);
-        buy_in(&mut pool, @2, 100000000000000000);
-        assert!(redeem_shares(&mut pool, @1, 1) == 1, 0);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_redeem_zero_shares() {
-        let pool = create(2);
-        buy_in(&mut pool, @1, 1);
-        assert!(redeem_shares(&mut pool, @1, 0) == 0, 0);
-        assert!(shares(&pool, @1) == 1, 1);
-        assert!(total_coins(&pool) == 1, 2);
-        assert!(total_shares(&pool) == 1, 3);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 65537)]
-    public entry fun test_deduct_shares_non_existent_shareholder() {
-        let pool = create(1);
-        add_shares(&mut pool, @1, 1);
-        deduct_shares(&mut pool, @2, 1);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 65540)]
-    public entry fun test_deduct_shares_insufficient_shares() {
-        let pool = create(1);
-        add_shares(&mut pool, @1, 1);
-        deduct_shares(&mut pool, @1, 2);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_deduct_shares_remove_shareholder_with_no_shares() {
-        let pool = create(2);
-        add_shares(&mut pool, @1, 1);
-        add_shares(&mut pool, @2, 2);
-        assert!(shareholders_count(&pool) == 2, 0);
-        deduct_shares(&mut pool, @1, 1);
-        assert!(shareholders_count(&pool) == 1, 1);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_amount_to_shares_empty_pool() {
-        let pool = create(1);
-        // No total shares and total coins.
-        assert!(amount_to_shares(&pool, 1000) == 1000, 0);
-
-        // No total shares but some total coins.
-        update_total_coins(&mut pool, 1000);
-        assert!(amount_to_shares(&pool, 1000) == 1000, 1);
-
-        // No total coins but some total shares.
-        update_total_coins(&mut pool, 0);
-        add_shares(&mut pool, @1, 100);
-        assert!(amount_to_shares(&pool, 1000) == 1000, 2);
-        destroy_pool(pool);
-    }
-
-    #[test]
-    public entry fun test_shares_to_amount_empty_pool() {
-        let pool = create(1);
-        // No total shares and total coins.
-        assert!(shares_to_amount(&pool, 1000) == 0, 0);
-
-        // No total shares but some total coins.
-        update_total_coins(&mut pool, 1000);
-        assert!(shares_to_amount(&pool, 1000) == 0, 1);
-
-        // No total coins but some total shares.
-        update_total_coins(&mut pool, 0);
-        add_shares(&mut pool, @1, 100);
-        assert!(shares_to_amount(&pool, 1000) == 0, 2);
-        destroy_pool(pool);
-    }
+    // #[test]
+    // public entry fun test_buy_in_and_redeem() {
+    //     let pool = create(5);
+    //
+    //     // Shareholders 1 and 2 buy in first.
+    //     buy_in(&mut pool, @1, 1000);
+    //     buy_in(&mut pool, @2, 2000);
+    //     assert!(shareholders_count(&pool) == 2, 0);
+    //     assert!(total_coins(&pool) == 3000, 1);
+    //     assert!(total_shares(&pool) == 3000, 2);
+    //     assert!(shares(&pool, @1) == 1000, 3);
+    //     assert!(shares(&pool, @2) == 2000, 4);
+    //     assert!(balance(&pool, @1) == 1000, 5);
+    //     assert!(balance(&pool, @2) == 2000, 6);
+    //
+    //     // Pool increases in value.
+    //     update_total_coins(&mut pool, 5000);
+    //     assert!(shares(&pool, @1) == 1000, 7);
+    //     assert!(shares(&pool, @2) == 2000, 8);
+    //     let expected_balance_1 = 1000 * 5000 / 3000;
+    //     assert!(balance(&pool, @1) == expected_balance_1, 9);
+    //     let expected_balance_2 = 2000 * 5000 / 3000;
+    //     assert!(balance(&pool, @2) == expected_balance_2, 10);
+    //
+    //     // Shareholder 3 buys in into the 5000-coin pool with 1000 coins. There are 3000 existing shares.
+    //     let expected_shares = 1000 * 3000 / 5000;
+    //     buy_in(&mut pool, @3, 1000);
+    //     assert!(shares(&pool, @3) == expected_shares, 11);
+    //     assert!(balance(&pool, @3) == 1000, 12);
+    //
+    //     // Pool increases more in value.
+    //     update_total_coins(&mut pool, 8000);
+    //
+    //     // Shareholders 1 and 2 redeem.
+    //     let all_shares = 3000 + expected_shares;
+    //     assert!(total_shares(&pool) == all_shares, 13);
+    //     let expected_value_per_500_shares = 500 * 8000 / all_shares;
+    //     assert!(redeem_shares(&mut pool, @1, 500) == expected_value_per_500_shares, 14);
+    //     assert!(redeem_shares(&mut pool, @1, 500) == expected_value_per_500_shares, 15);
+    //     assert!(redeem_shares(&mut pool, @2, 2000) == expected_value_per_500_shares * 4, 16);
+    //
+    //     // Due to a very small rounding error of 1, shareholder 3 actually has 1 more coin.
+    //     let shareholder_3_balance = expected_value_per_500_shares * 6 / 5 + 1;
+    //     assert!(balance(&pool, @3) == shareholder_3_balance, 17);
+    //     assert!(total_coins(&pool) == shareholder_3_balance, 18);
+    //     assert!(shareholders_count(&pool) == 1, 19);
+    //     let num_shares_3 = shares(&pool, @3);
+    //     assert!(redeem_shares(&mut pool, @3, num_shares_3) == shareholder_3_balance, 20);
+    //
+    //     // Nothing left.
+    //     assert!(shareholders_count(&pool) == 0, 21);
+    //     destroy_empty(pool);
+    // }
+    //
+    // #[test]
+    // #[expected_failure(abort_code = 196611)]
+    // public entry fun test_destroy_empty_should_fail_if_not_empty() {
+    //     let pool = create(1);
+    //     update_total_coins(&mut pool, 100);
+    //     destroy_empty(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_buy_in_and_redeem_large_numbers() {
+    //     let pool = create(2);
+    //     let half_max_u64 = MAX_U64 / 2;
+    //     let shares_1 = buy_in(&mut pool, @1, half_max_u64);
+    //     assert!(shares_1 == half_max_u64, 0);
+    //     let shares_2 = buy_in(&mut pool, @2, half_max_u64 + 1);
+    //     assert!(shares_2 == half_max_u64 + 1, 1);
+    //     assert!(total_shares(&pool) == MAX_U64, 2);
+    //     assert!(total_coins(&pool) == MAX_U64, 3);
+    //     assert!(redeem_shares(&mut pool, @1, shares_1) == half_max_u64, 4);
+    //     assert!(redeem_shares(&mut pool, @2, shares_2) == half_max_u64 + 1, 5);
+    //     destroy_empty(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_buy_in_and_redeem_large_numbers_with_scaling_factor() {
+    //     let pool = create_with_scaling_factor(2, 100);
+    //     let shares = buy_in(&mut pool, @1, MAX_U64 / 100);
+    //     assert!(total_shares(&pool) == MAX_U64 / 100, 0);
+    //     assert!(total_coins(&pool) == MAX_U64 / 100, 1);
+    //     assert!(redeem_shares(&mut pool, @1, shares) == MAX_U64 / 100, 2);
+    //     destroy_empty(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_buy_in_zero_amount() {
+    //     let pool = create(2);
+    //     buy_in(&mut pool, @1, 100);
+    //     assert!(buy_in(&mut pool, @2, 0) == 0, 0);
+    //     assert!(total_shares(&pool) == shares(&pool, @1), 1);
+    //     assert!(shareholders_count(&pool) == 1, 2);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_buy_in_with_small_coins_amount() {
+    //     let pool = create(2);
+    //     // Shareholder 1 buys in with 1e17 coins.
+    //     buy_in(&mut pool, @1, 100000000000000000);
+    //     // Shareholder 2 buys in with a very small amount.
+    //     assert!(buy_in(&mut pool, @2, 1) == 1, 0);
+    //     // Pool's total coins increases by 20%. Shareholder 2 shouldn't see any actual balance increase as it gets
+    //     // rounded down.
+    //     let total_coins = total_coins(&pool);
+    //     update_total_coins(&mut pool, total_coins * 6 / 5);
+    //     // Minus 1 due to rounding error.
+    //     assert!(balance(&pool, @1) == 100000000000000000 * 6 / 5 - 1, 1);
+    //     assert!(balance(&pool, @2) == 1, 2);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_add_zero_shares_should_not_add_shareholder() {
+    //     let pool = create(1);
+    //     update_total_coins(&mut pool, 1000);
+    //     assert!(add_shares(&mut pool, @1, 0) == 0, 0);
+    //     assert!(shareholders_count(&pool) == 0, 1);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_add_zero_shares_returns_existing_number_of_shares() {
+    //     let pool = create(1);
+    //     update_total_coins(&mut pool, 1000);
+    //     add_shares(&mut pool, @1, 1);
+    //     assert!(shares(&pool, @1) == add_shares(&mut pool, @1, 0), 0);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_add_shares_existing_shareholder() {
+    //     let pool = create(1);
+    //     update_total_coins(&mut pool, 1000);
+    //     add_shares(&mut pool, @1, 1);
+    //     add_shares(&mut pool, @1, 2);
+    //     assert!(shares(&mut pool, @1) == 3, 0);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_add_shares_new_shareholder() {
+    //     let pool = create(2);
+    //     update_total_coins(&mut pool, 1000);
+    //     add_shares(&mut pool, @1, 1);
+    //     add_shares(&mut pool, @2, 2);
+    //     assert!(shares(&mut pool, @1) == 1, 0);
+    //     assert!(shares(&mut pool, @2) == 2, 1);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // #[expected_failure(abort_code = 196610)]
+    // public entry fun test_add_shares_should_enforce_shareholder_limit() {
+    //     let pool = create(2);
+    //     add_shares(&mut pool, @1, 1);
+    //     add_shares(&mut pool, @2, 2);
+    //     add_shares(&mut pool, @3, 2);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_add_shares_should_work_after_reducing_shareholders_below_limit() {
+    //     let pool = create(3);
+    //     add_shares(&mut pool, @1, 1);
+    //     add_shares(&mut pool, @2, 2);
+    //     deduct_shares(&mut pool, @2, 2);
+    //     add_shares(&mut pool, @3, 3);
+    //     assert!(shares(&pool, @3) == 3, 0);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // #[expected_failure(abort_code = 65537)]
+    // public entry fun test_redeem_shares_non_existent_shareholder() {
+    //     let pool = create(1);
+    //     add_shares(&mut pool, @1, 1);
+    //     redeem_shares(&mut pool, @2, 1);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // #[expected_failure(abort_code = 65540)]
+    // public entry fun test_redeem_shares_insufficient_shares() {
+    //     let pool = create(1);
+    //     add_shares(&mut pool, @1, 1);
+    //     redeem_shares(&mut pool, @1, 2);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_redeem_small_number_of_shares() {
+    //     let pool = create(2);
+    //     // 1e17 shares and coins.
+    //     buy_in(&mut pool, @1, 100000000000000000);
+    //     buy_in(&mut pool, @2, 100000000000000000);
+    //     assert!(redeem_shares(&mut pool, @1, 1) == 1, 0);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_redeem_zero_shares() {
+    //     let pool = create(2);
+    //     buy_in(&mut pool, @1, 1);
+    //     assert!(redeem_shares(&mut pool, @1, 0) == 0, 0);
+    //     assert!(shares(&pool, @1) == 1, 1);
+    //     assert!(total_coins(&pool) == 1, 2);
+    //     assert!(total_shares(&pool) == 1, 3);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // #[expected_failure(abort_code = 65537)]
+    // public entry fun test_deduct_shares_non_existent_shareholder() {
+    //     let pool = create(1);
+    //     add_shares(&mut pool, @1, 1);
+    //     deduct_shares(&mut pool, @2, 1);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // #[expected_failure(abort_code = 65540)]
+    // public entry fun test_deduct_shares_insufficient_shares() {
+    //     let pool = create(1);
+    //     add_shares(&mut pool, @1, 1);
+    //     deduct_shares(&mut pool, @1, 2);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_deduct_shares_remove_shareholder_with_no_shares() {
+    //     let pool = create(2);
+    //     add_shares(&mut pool, @1, 1);
+    //     add_shares(&mut pool, @2, 2);
+    //     assert!(shareholders_count(&pool) == 2, 0);
+    //     deduct_shares(&mut pool, @1, 1);
+    //     assert!(shareholders_count(&pool) == 1, 1);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_amount_to_shares_empty_pool() {
+    //     let pool = create(1);
+    //     // No total shares and total coins.
+    //     assert!(amount_to_shares(&pool, 1000) == 1000, 0);
+    //
+    //     // No total shares but some total coins.
+    //     update_total_coins(&mut pool, 1000);
+    //     assert!(amount_to_shares(&pool, 1000) == 1000, 1);
+    //
+    //     // No total coins but some total shares.
+    //     update_total_coins(&mut pool, 0);
+    //     add_shares(&mut pool, @1, 100);
+    //     assert!(amount_to_shares(&pool, 1000) == 1000, 2);
+    //     destroy_pool(pool);
+    // }
+    //
+    // #[test]
+    // public entry fun test_shares_to_amount_empty_pool() {
+    //     let pool = create(1);
+    //     // No total shares and total coins.
+    //     assert!(shares_to_amount(&pool, 1000) == 0, 0);
+    //
+    //     // No total shares but some total coins.
+    //     update_total_coins(&mut pool, 1000);
+    //     assert!(shares_to_amount(&pool, 1000) == 0, 1);
+    //
+    //     // No total coins but some total shares.
+    //     update_total_coins(&mut pool, 0);
+    //     add_shares(&mut pool, @1, 100);
+    //     assert!(shares_to_amount(&pool, 1000) == 0, 2);
+    //     destroy_pool(pool);
+    // }
 }
