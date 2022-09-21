@@ -5,7 +5,6 @@ module openrails::shared_stake_pool {
     use std::vector;
     use std::error;
     use std::option::{Self, Option};
-    use openrails::pool_u64;
     use aptos_std::simple_map::{Self, SimpleMap};
     use aptos_framework::coin::{Self, Coin};
     use aptos_framework::aptos_coin::AptosCoin;
@@ -27,6 +26,8 @@ module openrails::shared_stake_pool {
     const EACCOUNT_NOT_FOUND: u64 = 4;
     const EINVALID_PERFORMANCE_FEE: u64 = 5;
     const EGOVERNANCE_NOT_FOUND: u64 = 6;
+    const ENO_SHARE_CHEST_FOUND: u64 = 7;
+    const ENO_SHARE_FOUND: u64 = 8;
 
     /// Validator status enums.
     const VALIDATOR_STATUS_PENDING_ACTIVE: u64 = 1;
@@ -36,18 +37,28 @@ module openrails::shared_stake_pool {
 
     struct SharedStakePool has key {
         owner_cap: stake::OwnerCapability,
-        stakeholders: pool_u64::Pool,
-        pending_active: IterableMap,
-        pending_inactive: IterableMap,
-        inactive: IterableMap,
+        pending_inactive_shares: IterableMap,
+        inactive_coins: IterableMap,
         balances: Balances,
+        share_to_unlock_next_epoch: u64,
         operator_agreement: OperatorAgreement,
         pending_operator_agreement: Option<OperatorAgreement>,
-        validator_status: u64
+        validator_status: u64,
+        performance_log: vector<u128>
     }
 
-    struct StakePoolLookup has key {
+    struct TotalValueLocked has key {
+        coins: u128,
+        shares: u128
+    }
 
+    struct Share has store {
+        addr: address,
+        value: u64
+    }
+
+    struct ShareChest has key {
+        inner: vector<Share>
     }
 
     struct IterableMap has store, drop {
@@ -58,9 +69,8 @@ module openrails::shared_stake_pool {
     // These balances are cached versions of the same coin values in stake::StakePool
     struct Balances has store {
         active: u64,
-        inactive: u64,
         pending_active: u64,
-        pending_inactive: u64,
+        pending_inactive_shares: u64,
     }
 
     struct EpochTracker has key {
@@ -77,7 +87,7 @@ module openrails::shared_stake_pool {
     }
 
     struct GovernanceCapability has key, store {
-        shared_pool_address: address
+        pool_addr: address
     }
 
     // ================= User entry functions =================
@@ -88,121 +98,162 @@ module openrails::shared_stake_pool {
         assert!(!exists<SharedStakePool>(addr), error::invalid_argument(EALREADY_REGISTERED));
 
         stake::initialize_stake_owner(this, 0, addr, addr);
-
-        // Initialize validator config.
-        stake::rotate_consensus_key(this, addr, CONSENSUS_KEY_2, CONSENSUS_POP_2);
         
-        // let owner_cap = stake::extract_owner_cap(this);
-        // let stakeholders = pool_u64::create(MAX_SHAREHOLDERS);
-        //
-        // move_to(this, SharedStakePool {
-        //     owner_cap,
-        //     stakeholders,
-        //     pending_active: IterableMap {
-        //         map: simple_map::create<address, u64>(),
-        //         list: vector::empty<address>()
-        //     },
-        //     pending_inactive: IterableMap {
-        //         map: simple_map::create<address, u64>(),
-        //         list: vector::empty<address>()
-        //     },
-        //     inactive: IterableMap {
-        //         map: simple_map::create<address, u64>(),
-        //         list: vector::empty<address>()
-        //     },
-        //     balances: Balances {
-        //         active: 0,
-        //         inactive: 0,
-        //         pending_active: 0,
-        //         pending_inactive: 0,
-        //     },
-        //     operator_agreement: OperatorAgreement {
-        //         operator: addr,
-        //         monthly_fee_usd: 0,
-        //         performance_fee_bps: 500,
-        //         last_paid_secs: 0,
-        //         epoch_effective: 0
-        //     },
-        //     pending_operator_agreement: option::none(),
-        //     validator_status: VALIDATOR_STATUS_INACTIVE
-        // });
-        //
-        // move_to(this, EpochTracker {
-        //     epoch: reconfiguration::current_epoch(),
-        //     locked_until_secs: stake::get_lockup_secs(addr)
-        // });
-        //
-        // move_to(this, GovernanceCapability {
-        //     shared_pool_address: addr
-        // });
+        let owner_cap = stake::extract_owner_cap(this);
+        
+        move_to(this, SharedStakePool {
+            owner_cap,
+            pending_active: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            pending_inactive_shares: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            inactive: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            balances: Balances {
+                active: 0,
+                inactive: 0,
+                pending_active: 0,
+                pending_inactive: 0,
+            },
+            operator_agreement: OperatorAgreement {
+                operator: addr,
+                monthly_fee_usd: 0,
+                performance_fee_bps: 500,
+                last_paid_secs: 0,
+                epoch_effective: 0
+            },
+            share_to_unlock_next_epoch: 0,
+            pending_operator_agreement: option::none(),
+            validator_status: VALIDATOR_STATUS_INACTIVE
+        });
+
+        move_to(this, TotalValueLocked {
+            coins: 0,
+            shares: 0
+        });
+        
+        move_to(this, EpochTracker {
+            epoch: reconfiguration::current_epoch(),
+            locked_until_secs: stake::get_lockup_secs(addr)
+        });
+        
+        move_to(this, GovernanceCapability {
+            pool_addr: addr
+        });
     }
 
-    public entry fun deposit(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool {
+    public entry fun deposit(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked {
         let coins = coin::withdraw<AptosCoin>(account, amount);
-        deposit_with_coins(this, signer::address_of(account), coins);
+        let share = deposit_with_coins(this, signer::address_of(account), coins);
+
+        let addr = signer::address_of(account);
+        if (!exists<ShareChest>(addr)) {
+            move_to(account, ShareChest { inner: vector::empty<Share>() });
+        };
+
+        deposit_share(addr, share);
     }
 
-    public fun deposit_with_coins(this: address, addr: address, coins: Coin<AptosCoin>) acquires EpochTracker, SharedStakePool {
+    public fun deposit_with_coins(this: address, addr: address, coins: Coin<AptosCoin>): Share acquires EpochTracker, SharedStakePool, TotalValueLocked {
         crank_on_new_epoch(this);
-        let value = coin::value<AptosCoin>(&coins);
-        if (value == 0) {
+        let coin_value = coin::value<AptosCoin>(&coins);
+        if (coin_value == 0) {
             coin::destroy_zero<AptosCoin>(coins);
             return
         };
 
-        let stake_pool = borrow_global_mut<SharedStakePool>(this);
+        let stake_pool = borrow_global<SharedStakePool>(this);
         stake::add_stake_with_cap(&stake_pool.owner_cap, coins);
+        *stake_pool.balances.pending_active = *stake_pool.balances.pending_active + coin_value;
 
-        if (!is_active_validator(*&stake_pool.validator_status)) {
-            // balance goes immediately into active
-            pool_u64::buy_in(&mut stake_pool.stakeholders, addr, value);
-            stake_pool.balances.active = stake_pool.balances.active + value;
-        }
-        else {
-            // balance goes into pending_active
-            add_to_iterable_map(&mut stake_pool.pending_active, addr, value);
-            stake_pool.balances.pending_active = stake_pool.balances.pending_active + value;
-        }
+        let tvl = borrow_global_mut<TotalValueLocked>(this);
+        let share_value = apt_to_share(tvl, coin_value);
+        let share = Share { addr: this, value: share_value };
+
+        *tvl.coins = *tvl.coins + (value as u128);
+        *tvl.shares = *tvl.shares + (share_value as u128);
+
+        share
     }
 
-    public entry fun unlock(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool {
-        crank_on_new_epoch(this);
+    public entry fun unlock(account: &signer, this: address, coin_value: u64) acquires EpochTracker, SharedStakePool {
         let addr = signer::address_of(account);
-        let (active, _inactive, _pending_active, _pending_inactive) = get_balances_for_address(this, addr);
-        assert!(active >= amount, error::invalid_argument(EINSUFFICIENT_BALANCE));
 
+        let share_value = apt_to_share(this, coin_value);
+        let share = withdraw_share(account, this, share_value);
+
+        unlock_with_share(addr, share);
+    }
+
+    public fun unlock_with_share(addr: address, share: Share) acquires EpochTracker, SharedStakePool, TotalValueLocked {
+        crank_on_new_epoch(this);
+        let Share { addr: this, value: share_value } = share;
+
+        let tvl = borrow_global<TotalValueLocked>(this);
+        let coin_value = share_to_apt(tvl, share_value);
+        let (active, _, _, _) = stake::get_stake(this);
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
-        stake::unlock_with_cap(amount, &stake_pool.owner_cap);
 
-        add_to_iterable_map(&mut stake_pool.pending_inactive, addr, amount);
-        stake_pool.balances.pending_inactive = stake_pool.balances.pending_inactive + amount;
-        stake_pool.balances.active = stake_pool.balances.active - amount;
+        // this stake_pool doesn't have enough active balance to unlock; queue the unlock
+        if (active < coin_value) {
+            *stake_pool.share_to_unlock_next_epoch = *stake_pool.share_to_unlock_next_epoch + share_value;
+        } else {
+            stake::unlock_with_cap(coin_value, &stake_pool.owner_cap);
+            *stake_pool.balances.active = *stake_pool.balances.active - amount;
+        };
+
+        // We store the share_value for now, so that pending_inactive will continue to earn
+        // interest while it is unlocking
+        // We keep a record of all users we owe pending_unlocked money to and how much
+        //
         // Note: even if our validator is not active, aptos_framework::stake will still move stake from
         // active to pending_inactive, rather than straight to inactive
+        add_to_iterable_map(&mut stake_pool.pending_inactive_shares, addr, share_value);
+        *stake_pool.balances.pending_inactive_shares = *stake_pool.balances.pending_inactive_shares + share_value;
     }
 
-    public entry fun cancel_unlock(account: &signer, this: address, amount: u64) acquires SharedStakePool, EpochTracker {
+    public entry fun cancel_unlock(account: &signer, this: address, amount: u64) acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
+        let addr = signer::address_of(account);
+        let share = cancel_unlock_to_share(account, this, amount);
+        deposit_share(addr, share);
+    }
+
+    public fun cancel_unlock_to_share(account: &signer, this: address, coin_value: u64): Share acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
         crank_on_new_epoch(this);
         let addr = signer::address_of(account);
-        let (_active, _inactive, _pending_active, pending_inactive) = get_balances_for_address(this, addr);
-        assert!(pending_inactive >= amount, error::invalid_argument(EINSUFFICIENT_BALANCE));
-
+        let share_value = apt_to_share(this, coin_value);
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
-        stake::reactivate_stake_with_cap(&stake_pool.owner_cap, amount);
+        let pending_inactive_share_value = simple_map::borrow(stake_pool.balances.pending_inactive_shares, &addr);
 
-        subtract_from_iterable_map(&mut stake_pool.pending_inactive, addr, amount);
-        stake_pool.balances.pending_inactive = stake_pool.balances.pending_inactive - amount;
-        stake_pool.balances.active = stake_pool.balances.active + amount;
+        assert!(share_value <= pending_inactive_share_value, error::invalid_argument(EINSUFFICIENT_BALANCE));
+
+        if (stake_pool.share_to_unlock_next_epoch >= share_value) {
+            *stake_pool.share_to_unlock_next_epoch = *stake_pool.share_to_unlock_next_epoch - share_value;
+        } else {
+            stake::reactivate_stake_with_cap(&stake_pool.owner_cap, coin_value);
+            *stake_pool.balances.active = *stake_pool.balances.active + coin_value;
+        };
+
+        subtract_from_iterable_map(&mut stake_pool.pending_inactive_shares, addr, share_value);
+        *stake_pool.balances.pending_inactive_shares = *stake_pool.balances.pending_inactive_shares - share_value;
+
+        Share { addr: this, value: share_value }
     }
 
-    public entry fun withdraw(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool {
+    public entry fun withdraw(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked {
         let coin = withdraw_to_coins(account, this, amount);
         coin::deposit<AptosCoin>(signer::address_of(account), coin);
     }
 
-    public entry fun withdraw_to_coins(account: &signer, this: address, amount: u64): Coin<AptosCoin> acquires EpochTracker, SharedStakePool {
+    public entry fun withdraw_to_coins(account: &signer, this: address, coin_value: u64): Coin<AptosCoin> acquires EpochTracker, SharedStakePool, TotalValueLocked {
         crank_on_new_epoch(this);
-        if (amount == 0) {
+        if (coin_value == 0) {
             return coin::zero<AptosCoin>()
         };
 
@@ -211,13 +262,18 @@ module openrails::shared_stake_pool {
         let epoch_tracker = borrow_global<EpochTracker>(this);
 
         if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE) {
-            // In this case, we can move stake straight from active -> pending_inactive -> inactive -> withdrawn
+            // In this case, we can move coins straight from active -> pending_inactive -> inactive -> withdrawn
             if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
-                let (_active, inactive, _, _) = get_balances_for_address(this, addr);
+                let inactive_coins_value = if (simple_map::contains_key(&stake_pool.inactive_coins.map, addr)) { 
+                    simple_map::borrow(&stake_pool.inactive_coins.map, &addr)
+                }
+                else {
+                    0
+                };
 
                 //we only dip into a user's active balance if their inactive balance is insufficent
-                if (amount > inactive) {
-                    unlock(account, this, amount);
+                if (coin_value > *inactive_coins_value) {
+                    unlock(account, this, coin_value - *inactive_coins_value);
                 };
             };
         };
@@ -230,66 +286,95 @@ module openrails::shared_stake_pool {
         // In this edge-case, the stake::withdraw_with_cap function we call below will move
         // everything out of pending_inactive. We account for this here.
         if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE && timestamp::now_seconds() >= epoch_tracker.locked_until_secs && stake_pool.balances.pending_inactive > 0) {
-                move_pending_inactive_to_inactive(stake_pool);
+            let tvl = borrow_global_mut<TotalValueLocked>(this);
+            move_pending_inactive_to_inactive(stake_pool, tvl);
         };
 
-        assert!(simple_map::contains_key(&stake_pool.inactive.map, &addr), error::not_found(EACCOUNT_NOT_FOUND));
+        assert!(simple_map::contains_key(&stake_pool.inactive_coins.map, &addr), error::not_found(EACCOUNT_NOT_FOUND));
 
-        let withdrawable_balance = simple_map::borrow_mut(&mut stake_pool.inactive.map, &addr);
+        let withdrawable_balance = simple_map::borrow(stake_pool.inactive_coins.map, &addr);
         // Note: aptos_framework::stake will set amount = withdrawable_balance in this case, however
         // I think this behavior is wrong. If another module asks for 1000 APT but they can only withdraw
         // 500, it's best to give them an error rather than giving them 500.
         assert!(*withdrawable_balance >= amount, error::invalid_argument(EINSUFFICIENT_BALANCE));
 
-        subtract_from_iterable_map(&mut stake_pool.inactive, addr, amount);
-        stake_pool.balances.inactive = stake_pool.balances.inactive - amount;
+        subtract_from_iterable_map(&mut stake_pool.inactive_coins, addr, amount);
 
         let coins = stake::withdraw_with_cap(&stake_pool.owner_cap, amount);
         coins
     }
 
-    public fun get_balances_for_address(this: address, addr: address): (u64, u64, u64, u64) acquires EpochTracker, SharedStakePool {
-        crank_on_new_epoch(this);
-        let stake_pool = borrow_global<SharedStakePool>(this);
+    // ============== Helper functions ==============
 
-        let pending_inactive = if (simple_map::contains_key(&stake_pool.pending_inactive.map, &addr)) {
-            *simple_map::borrow(&stake_pool.pending_inactive.map, &addr)
-        }
-        else {
-            0
-        };
-
-        let inactive = if (simple_map::contains_key(&stake_pool.inactive.map, &addr)) {
-            *simple_map::borrow(&stake_pool.inactive.map, &addr)
-        }
-        else {
-            0
-        };
-
-        let pending_active = if (simple_map::contains_key(&stake_pool.pending_active.map, &addr)) {
-            *simple_map::borrow(&stake_pool.pending_active.map, &addr)
-        }
-        else {
-            0
-        };
-
-        let active = pool_u64::balance(&stake_pool.stakeholders, addr) - pending_inactive;
-
-        (active, inactive, pending_active, pending_inactive)
+    public fun share_to_apt(tvl: &TotalValueLocked, amount: u64): u64 {
+        (((amount as u128) / share_apt_ratio(pool_addr)) as u64)
     }
 
-    public fun get_withdrawable_balance(this: address, addr: address): u64 acquires EpochTracker, SharedStakePool {
-        let (active, inactive, _pending_active, pending_inactive) = get_balances_for_address(this, addr);
+    public fun apt_to_share(tvl: &TotalValueLocked, amount: u64): u64 {
+        (((amount as u128) * share_apt_ratio(pool_addr)) as u64)
+    }
 
-        let epoch_tracker = borrow_global<EpochTracker>(this);
-        let status = *&borrow_global_mut<SharedStakePool>(this).status;
-        if (status == VALIDATOR_STATUS_INACTIVE) {
-            if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
-                active + inactive + pending_inactive
-            };
+    // We assume that crank_on_new_epoch has been called, otherwise this will
+    // understimate the number of coins we have, and give an inferior price
+    // This is not a security risk, but if slashing is every introduced, this should be changed
+    // to check the crank, as it might be possible we have fewer coins than expected
+    public fun share_apt_ratio(tvl: &TotalValueLocked): u128 {
+        if (*tvl.coins == 0 || *tvl.shares == 0) {
+            1
         } else {
-            inactive
+            ((*tvl.shares as u128) / (*tvl.coins as u128))
         }
+    }
+
+    public fun deposit_share(user_addr: address, share: Share) acquires ShareChest {
+        assert!(exists<ShareChest>(user_addr), ENO_SHARE_CHEST_FOUND);
+        let share_chest = &mut borrow_global_mut<ShareChest>(user_addr).inner;
+
+        // This ensures that every share in our share chest is from a unique pool address
+        let i = 0;
+        let len = vector::length(share_chest);
+        while (i < len) {
+            let stored_share = vector::borrow_mut(&share_chest, i);
+
+            if (*share.addr == stored_share.addr) {
+                *stored_share.value = *stored_share.value + *share.value;
+                let Share { addr: _, value: _ } = share;
+                return
+            };
+
+            i = i + 1;
+        };
+
+        vector::push_back<Share>(share_chest, share);
+    }
+
+    // share_value is the number of shares you want to withdraw, not the number of coin
+    public fun withdraw_share(account: &signer, pool_addr: address, share_value: u64): Share acquires ShareChest {
+        assert!(exists<ShareChest>(user_addr), ENO_SHARE_CHEST_FOUND);
+        let share_chest = &mut borrow_global_mut<ShareChest>(user_addr).inner;
+        
+        let i = 0;
+        let len = vector::length(share_chest);
+        while (i < len) {
+            let stored_share = vector::borrow_mut(&share_chest, i);
+
+            if (*pool_addr == stored_share.addr) {
+                assert(stored_share.value >= share_value, error::invalid_argument(EINSUFFICIENT_BALANCE));
+                *stored_share.value = *stored_share.value - share_value;
+
+                if (stored_share.value == 0) {
+                    let old_share = vector::remove<Share>(share_chest, i);
+                    let Share { addr: _, value: _ } = old_share;
+                };
+
+                let share = Share { addr: pool_addr, value: share_value };
+                return share
+            };
+
+            i = i + 1;
+        };
+
+        assert!(false, error::invalid_argument(ENO_SHARE_FOUND));
     }
 
 
@@ -310,8 +395,28 @@ module openrails::shared_stake_pool {
         if (current_epoch <= epoch_tracker.epoch) return;
         epoch_tracker.epoch = current_epoch;
 
-        // calculate rewards for the previous epoch
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
+        let tvl = borrow_global_mut<TotalValueLocked>(this);
+        // This timestamp going up means our validator's lockup was renewed, so an unlock event
+        // occurred.
+        // In order for this to be logically sound, we need to make sure that all IncreaseLockupEvent
+        // events go through our module, so we can adjust our EpochTracker.locked_until_secs accordinginly.
+        //
+        // I added the pending_inactive check as a double-measure; all pending_inactive stake should
+        // have been emptied out by aptos_framework::stake when an unlock event occurs
+        //
+        // We deliberately process this prior to updating our tvl for the last epoch. This means
+        // that unlocking stakers will not earn interest on their stake for the final epoch. This
+        // compensates for the pending_active stakers who do earn interest on the one epoch where they
+        // are not qualified for. Also, this allows us to make sure there is always enough coins
+        // in stake_pool.inactive to meet all withdrawls. See below in this function.
+        let locked_until_secs = stake::get_lockup_secs(this);
+        if ((locked_until_secs > epoch_tracker.locked_until_secs) && (pending_inactive == 0)) {
+            epoch_tracker.locked_until_secs = locked_until_secs;
+            move_pending_inactive_to_inactive(stake_pool, tvl);
+        };
+
+        // calculate rewards for the previous epoch
         let (active, _, _, pending_inactive) = stake::get_stake(this);
         let stake_before_rewards = stake_pool.balances.active + stake_pool.balances.pending_active;
         let rewards_amount = if (active >= stake_before_rewards) {
@@ -322,37 +427,47 @@ module openrails::shared_stake_pool {
             // Move does not support negative numbers
             0
         };
-        let operator_fee = calculate_operator_fee(this, rewards_amount, &stake_pool.operator_agreement, stake_pool.validator_status);
 
-        // update total coin balance; excluding operator_fee and pending_active_map stake, which
-        // will be added below
-        pool_u64::update_total_coins(&mut stake_pool.stakeholders, active + stake_pool.balances.pending_inactive - stake_pool.balances.pending_active - operator_fee);
+        let performance = (rewards_amount as u128) / (stake_before_rewards as u128);
+        vector::push_back(&mut stake_pool.performance_log, performance);
+        // only stores the last 10 epochs
+        if (vector::length(&stake_pool.performance_log) > 10) {
+            vector::remove(&mut stake_pool.performance_log, 0);
+        };
+
+        // Update our coins balance to account for rewards
+        let tvl = borrow_global_mut<TotalValueLocked>(this);
+        tvl.coins = active + pending_inactive;
 
         // issue shares to pay the operator
-        pool_u64::buy_in(&mut stake_pool.stakeholders, stake::get_operator(this), operator_fee);
+        let operator_fee = calculate_operator_fee(this, rewards_amount, &stake_pool.operator_agreement, stake_pool.validator_status);
+        let shares_to_issue = apt_to_share(tvl, operator_fee);
+        issue_shares(this, stake::get_operator(this), operator_fee);
+
+        // Schedule unlocking any stake we didn't have enough stake.active for last epoch
+        if (*stake_pool.share_to_unlock_next_epoch > 0) {
+            let coin_value = share_to_apt(tvl, *stake_pool.share_to_unlock_next_epoch);
+            stake::unlock_with_cap(coin_value, &stake_pool.owner_cap);
+            *stake_pool.share_to_unlock_next_epoch = 0;
+        };
+
+        // Make sure we have enough stake pending_inactive to account for interest earned on
+        // pending_inactive stake. This ensures we can meet all withdrawls
+        let coin_value = share_to_apt(tvl, *stake_pool.balances.pending_inactive_shares);
+        if (coin_value > pending_inactive) {
+            let pending_inactive_interest = coin_value - pending_inactive;
+            stake::unlock_with_cap(pending_inactive_interest, &stake_pool.owner_cap);
+        };
+        // Note: the above stake unlocks have already been accounted for in
+        // stake_pool.balances.pending_inactive_shares, and we do not need to update that value
+        // here.
 
         // update our cached values
+        let (active, _, pending_active, _) = stake::get_stake(this);
+        *stake_pool.active = active;
+        *stake_pool.pending_active = pending_active;
         stake_pool.operator_agreement.last_paid_secs = reconfiguration::last_reconfiguration_time() / MICRO_CONVERSION_FACTOR;
         stake_pool.validator_status = stake::get_validator_state(this);
-
-        // issue shares for the stakers who activated this epoch
-        move_pending_active_to_active(stake_pool);
-
-        let locked_until_secs = stake::get_lockup_secs(this);
-        // This timestamp going up means our validator's lockup was renewed, so an unlock event
-        // occurred.
-        // In order for this to be logically sound, we need to make sure that all IncreaseLockupEvent
-        // events go through our module, so we can adjust our EpochTracker.locked_until_secs accordinginly.
-        //
-        // TO DO: The aptos_framework::stake module really needs to include its own stake unlock event. I
-        // created an issue here to resolve this: https://github.com/aptos-labs/aptos-core/issues/4080
-        // However this SharedStakePool will still needs to track all this info manually,
-        // because on-chain functions can't read on-chain events, as ridicilous as that sounds...
-        // I added the pending_inactive check as a double-measure
-        if ((locked_until_secs > epoch_tracker.locked_until_secs) && (pending_inactive == 0)) {
-            epoch_tracker.locked_until_secs = locked_until_secs;
-            move_pending_inactive_to_inactive(stake_pool);
-        };
 
         // Check if we have a pending operator agreement to switch to
         if (option::is_some(&stake_pool.pending_operator_agreement)) {
@@ -371,8 +486,6 @@ module openrails::shared_stake_pool {
         };
 
         stake_pool.operator_agreement = option::extract(&mut stake_pool.pending_operator_agreement);
-        // TO DO: do we need this next line?
-        stake_pool.pending_operator_agreement = option::none();
     }
 
     // crank sub-function. Cannot abort
@@ -402,70 +515,61 @@ module openrails::shared_stake_pool {
             let _fixed_fee_apt = convert_usd_to_apt((fixed_fee_usd as u64), epoch_start_secs);
             let incentive_fee_apt = ((rewards_amount as u128) * (operator_agreement.performance_fee_bps as u128) / 10000 as u64);
 
-            // TO DO: when usd_to_apt is implemented, start including the fixed fee as well
+            // TO DO: when convert_usd_to_apt is implemented, start including the fixed fee as well
             operator_fee = incentive_fee_apt; // + _fixed_fee_apt;
         };
 
         (operator_fee as u64)
     }
 
-    // crank sub-function. Cannot abort
-    fun move_pending_active_to_active(stake_pool: &mut SharedStakePool) {
-        let addresses = stake_pool.pending_active.list;
-        let pending_active_map = stake_pool.pending_active.map;
-        let stakeholders = &mut stake_pool.stakeholders;
-
-        let i = 0;
-        let len = vector::length(&addresses);
-        while (i < len) {
-            let addr = vector::borrow(&mut addresses, i);
-
-            let new_active_balance = if (simple_map::contains_key(&pending_active_map, addr)) {
-                *simple_map::borrow(&pending_active_map, addr)
-            }
-            else {
-                0
-            };
-
-            // active balance will begin earning interest this epoch
-            pool_u64::buy_in(stakeholders, *addr, new_active_balance);
-            stake_pool.balances.active = stake_pool.balances.active + new_active_balance;
+    fun issue_shares(pool_addr: address, recipient: address, coin_value: u64) acquires TotalValueLocked, StakeChest {
+        // if the recipient is not setup to receive shares, we give them nothing
+        // it's important that the recipient setup their ShareChest ahead of time if they want us
+        // to pay them.
+        if (!exists<StakeChest>(recipient)) {
+            return
         };
-        stake_pool.pending_active.map = simple_map::create<address, u64>();
-        stake_pool.pending_active.list = vector::empty();
-        stake_pool.balances.pending_active = 0;
+
+        let tvl = borrow_global_mut<TotalValueLocked>(pool_addr);
+        let share_value = ((coin_value as u128) * tvl.shares / (tvl.coins - (coin_value as u128)) as u64);
+
+        let share = Share { addr: pool_addr, value: share };
+        *tvl.shares = *tvl.shares + share_value;
+        deposit_share(recipient, share);
     }
 
     // crank sub-function. Cannot abort
-    fun move_pending_inactive_to_inactive(stake_pool: &mut SharedStakePool) {
-        let addresses = stake_pool.pending_inactive.list;
-        let pending_inactive_map = stake_pool.pending_inactive.map;
-        let inactive_map = stake_pool.inactive.map;
-        let stakeholders = &mut stake_pool.stakeholders;
+    fun move_pending_inactive_to_inactive(stake_pool: &mut SharedStakePool, tvl: &mut TotalValueLocked) {
+        let addresses = stake_pool.pending_inactive_shares.list;
+        let inactive_map = stake_pool.inactive_coins.map;
 
         let i = 0;
         let len = vector::length(&addresses);
         while (i < len) {
-            let addr = vector::borrow(&mut addresses, i);
-            let pending_balance = simple_map::borrow(&mut pending_inactive_map, addr);
+            let addr = vector::borrow(&addresses, i);
+            let share_value = simple_map::borrow(&stake_pool.pending_inactive_shares.map, addr);
 
             // inactive stake no longer earns interest, and is considered redeemed
-            let shares = pool_u64::amount_to_shares(stakeholders, *pending_balance);
-            let redeemed_coins = pool_u64::redeem_shares(stakeholders, *addr, shares);
+            // convert all pending_inactive shares to inactive coins
+            let coin_value = share_to_apt(tvl, share_value);
+            *tvl.coins = *tvl.coins - coin_value;
+            *tvl.shares = *tvl.shares - share_value;
 
             if (simple_map::contains_key(&inactive_map, addr)) {
                 let inactive_balance = simple_map::borrow_mut(&mut inactive_map, addr);
-                *inactive_balance = *inactive_balance + redeemed_coins;
+                *inactive_balance = *inactive_balance + coin_value;
             }
             else {
-                simple_map::add(&mut inactive_map, *addr, redeemed_coins);
+                simple_map::add(&mut inactive_map, *addr, coin_value);
             };
 
-            stake_pool.balances.inactive = stake_pool.balances.inactive + redeemed_coins;
+            stake_pool.balances.inactive = stake_pool.balances.inactive + coin_value;
+            i = i + 1;
         };
-        stake_pool.pending_inactive.map = simple_map::create<address, u64>();
-        stake_pool.pending_inactive.list = vector::empty();
-        stake_pool.balances.pending_inactive = 0;
+
+        *stake_pool.pending_inactive.map = simple_map::create<address, u64>();
+        *stake_pool.pending_inactive.list = vector::empty<address>();
+        stake_pool.balances.pending_inactive_shares = 0;
     }
 
     // ================= Governance functions =================
@@ -480,11 +584,11 @@ module openrails::shared_stake_pool {
 
     // Warning; destroying this means governance can never be used again for this SharedStakePool
     public fun destroy_governance_cap(governance_cap: GovernanceCapability) {
-        let GovernanceCapability { shared_pool_address: _ } = governance_cap;
+        let GovernanceCapability { pool_addr: _ } = governance_cap;
     }
 
-    public fun get_governance_cap_shared_pool_address(governance_cap: &GovernanceCapability): address {
-        governance_cap.shared_pool_address
+    public fun get_governance_cap_pool_addr(governance_cap: &GovernanceCapability): address {
+        governance_cap.pool_addr
     }
 
     public entry fun set_operator_agreement(account: &signer, operator: address, monthly_fee_usd: u64, performance_fee_bps: u64, epoch_effective: u64) acquires GovernanceCapability, SharedStakePool {
@@ -511,7 +615,7 @@ module openrails::shared_stake_pool {
     // There are validators on Solana which will set their commission to 0%, then raise it briefly to
     // 10% right before an epoch end to deceive stakers. Our logic prevents this abusive behavior.
     public fun set_operator_agreement_with_cap(governance_cap: &GovernanceCapability, operator_agreement: OperatorAgreement) acquires SharedStakePool {
-        let this = governance_cap.shared_pool_address;
+        let this = governance_cap.pool_addr;
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
         stake_pool.pending_operator_agreement = option::some(operator_agreement);
 
@@ -529,7 +633,7 @@ module openrails::shared_stake_pool {
     }
 
     public fun set_delegated_voter_with_cap(governance_cap: &GovernanceCapability, new_voter: address) acquires SharedStakePool {
-        let this = governance_cap.shared_pool_address;
+        let this = governance_cap.pool_addr;
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
         stake::set_delegated_voter_with_cap(&stake_pool.owner_cap, new_voter);
     }
@@ -543,7 +647,7 @@ module openrails::shared_stake_pool {
     }
 
     public fun increase_lockup_with_cap(governance_cap: &GovernanceCapability) acquires SharedStakePool, EpochTracker {
-        let this = governance_cap.shared_pool_address;
+        let this = governance_cap.pool_addr;
         let stake_pool = borrow_global<SharedStakePool>(this);
         stake::increase_lockup_with_cap(&stake_pool.owner_cap);
 
