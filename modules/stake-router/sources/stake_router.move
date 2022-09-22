@@ -1,6 +1,6 @@
 // This is the stake router
 
-module openrails::stake_octopus {
+module openrails::stake_router {
     use std::string;
     use std::option;
     use std::signer;
