@@ -93,6 +93,7 @@ module openrails::shared_stake_pool {
 
     // ================= User entry functions =================
 
+    // Q: Why not create it via a resource account? This ties the current address to this module
     // Call to create a new SharedStakePool. Only one can exist per address
     public entry fun initialize(this: &signer) {
         let addr = signer::address_of(this);
@@ -714,11 +715,10 @@ module openrails::shared_stake_pool {
 
     // Tests >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
     fun end_to_end(aptos_framework: &signer, validator: &signer, user: &signer)
     acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
-        // Setup
+        // Initial setup
         let validator_addr = signer::address_of(validator);
         let user_addr = signer::address_of(user);
         account::create_account_for_test(signer::address_of(aptos_framework));
@@ -736,20 +736,38 @@ module openrails::shared_stake_pool {
 
 
         // Mint some coins to the user
-        aptos_coin::mint(aptos_framework, user_addr, 1000);
+        aptos_coin::mint(aptos_framework, user_addr, 300);
 
         // Call deposit, which stakes the tokens with the validator address
         deposit(user, validator_addr, 100);
 
         // Now that the validator has at least the minimum stake, it can be added to the validator set
-        stake::join_validator_set(validator, validator_addr);
+        stake::join_validator_set_for_test(validator, validator_addr, true);
 
+        // Assert that the balance in pending_active is the amount deposited, and the balance in active is still 0
         let shared_stake_pool = borrow_global<SharedStakePool>(validator_addr);
         assert!(shared_stake_pool.balances.pending_active == 100, EINVALID_BALANCE);
         assert!(shared_stake_pool.balances.active == 0, EINVALID_BALANCE);
+        // This is weird.. below the test passes but shouldn't it go to pending_active in this epoch first?
+        stake::assert_stake_pool(validator_addr, 100, 0, 0, 0);
 
+        // Assert that the user received shares equal to the initial deposit amount (100)
         let share_chest = borrow_global<ShareChest>(user_addr);
+        let user_share = vector::borrow(&share_chest.inner, 0);
+        let user_share_value = user_share.value;
+        assert!(user_share_value == 100, EINVALID_BALANCE);
 
+        // End the epoch, beginning a new one
+        stake::end_epoch();
+
+        // Check the balances
+        // This is wrong. The 100 coin balance should be in active now
+        assert!(shared_stake_pool.balances.pending_active == 100, EINVALID_BALANCE);
+        assert!(shared_stake_pool.balances.active == 0, EINVALID_BALANCE);
+        // This doesn't even pass, after messing with values
+        // stake::assert_stake_pool(validator_addr, 0, 0, 0, 0);
+
+        // Cannot call `deposit()` again either, creates a dangling reference error
 
     }
 
@@ -757,8 +775,6 @@ module openrails::shared_stake_pool {
     use aptos_framework::account;
     #[test_only]
     use aptos_framework::aptos_coin;
-    // #[test_only]
-    // use aptos_framework::aggregator_factory;
 
     #[test_only]
     const CONSENSUS_KEY_2: vector<u8> = x"a344eb437bcd8096384206e1be9c80be3893fd7fdf867acce5a048e5b1546028bdac4caf419413fd16d4d6a609e0b0a3";
