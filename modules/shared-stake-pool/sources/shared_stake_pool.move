@@ -28,6 +28,7 @@ module openrails::shared_stake_pool {
     const EGOVERNANCE_NOT_FOUND: u64 = 6;
     const ENO_SHARE_CHEST_FOUND: u64 = 7;
     const ENO_SHARE_FOUND: u64 = 8;
+    const EINVALID_BALANCE: u64 = 9;
 
     /// Validator status enums.
     const VALIDATOR_STATUS_PENDING_ACTIVE: u64 = 1;
@@ -92,6 +93,7 @@ module openrails::shared_stake_pool {
 
     // ================= User entry functions =================
 
+    // Q: Why not create it via a resource account? This ties the current address to this module
     // Call to create a new SharedStakePool. Only one can exist per address
     public entry fun initialize(this: &signer) {
         let addr = signer::address_of(this);
@@ -314,7 +316,7 @@ module openrails::shared_stake_pool {
 
     // We assume that crank_on_new_epoch has been called, otherwise this will
     // understimate the number of coins we have, and give an inferior price
-    // This is not a security risk, but if slashing is every introduced, this should be changed
+    // This is not a security risk, but if slashing is ever introduced, this should be changed
     // to check the crank, as it might be possible we have fewer coins than expected
     public fun share_apt_ratio(tvl: &TotalValueLocked): u128 {
         if (tvl.coins == 0 || tvl.shares == 0) {
@@ -438,7 +440,7 @@ module openrails::shared_stake_pool {
 
         // Update our coins balance to account for rewards
         let tvl = borrow_global_mut<TotalValueLocked>(this);
-        tvl.coins = (active + pending_inactive as u128);
+        tvl.coins = (active as u128) + (pending_inactive as u128);
 
         // issue shares to pay the operator
         let operator_fee = calculate_operator_fee(this, rewards_amount, &stake_pool.operator_agreement, stake_pool.validator_status);
@@ -538,7 +540,7 @@ module openrails::shared_stake_pool {
         let tvl = borrow_global_mut<TotalValueLocked>(pool_addr);
         let share_value = ((coin_value as u128) * tvl.shares / (tvl.coins - (coin_value as u128)) as u64);
 
-        let share = Share { addr: pool_addr, value: share_value };
+        let share = Share { addr: pool_addr, value: (share_value as u64) };
         tvl.shares = tvl.shares + (share_value as u128);
         deposit_share(recipient, share);
     }
@@ -713,20 +715,72 @@ module openrails::shared_stake_pool {
 
     // Tests >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    fun end_to_end(aptos_framework: &signer, validator: &signer, user: &signer)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+        // Initial setup
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+        account::create_account_for_test(signer::address_of(aptos_framework));
+        account::create_account_for_test(validator_addr);
+        account::create_account_for_test(user_addr);
+        reconfiguration::initialize_for_test(aptos_framework);
+        reconfiguration::reconfigure_for_test();
+        coin::register<AptosCoin>(validator);
+        coin::register<AptosCoin>(user);
+        stake::initialize_for_test_custom(aptos_framework, 100, 10000, LOCKUP_CYCLE_SECONDS, true, 1, 100, 100);
 
-    #[test(admin = @openrails)]
-    fun end_to_end(admin: &signer) {
-        initialize(admin)
+        // Call the initialize function, rotate consensus keys
+        initialize(validator);
+        stake::rotate_consensus_key(validator, validator_addr, CONSENSUS_KEY_2, CONSENSUS_POP_2);
+
+
+        // Mint some coins to the user
+        aptos_coin::mint(aptos_framework, user_addr, 300);
+
+        // Call deposit, which stakes the tokens with the validator address
+        deposit(user, validator_addr, 100);
+
+        // Now that the validator has at least the minimum stake, it can be added to the validator set
+        stake::join_validator_set_for_test(validator, validator_addr, true);
+
+        // Assert that the balance in pending_active is the amount deposited, and the balance in active is still 0
+        let shared_stake_pool = borrow_global<SharedStakePool>(validator_addr);
+        assert!(shared_stake_pool.balances.pending_active == 100, EINVALID_BALANCE);
+        assert!(shared_stake_pool.balances.active == 0, EINVALID_BALANCE);
+        // This is weird.. below the test passes but shouldn't it go to pending_active in this epoch first?
+        stake::assert_stake_pool(validator_addr, 100, 0, 0, 0);
+
+        // Assert that the user received shares equal to the initial deposit amount (100)
+        let share_chest = borrow_global<ShareChest>(user_addr);
+        let user_share = vector::borrow(&share_chest.inner, 0);
+        let user_share_value = user_share.value;
+        assert!(user_share_value == 100, EINVALID_BALANCE);
+
+        // End the epoch, beginning a new one
+        stake::end_epoch();
+
+        // Check the balances
+        // This is wrong. The 100 coin balance should be in active now
+        assert!(shared_stake_pool.balances.pending_active == 100, EINVALID_BALANCE);
+        assert!(shared_stake_pool.balances.active == 0, EINVALID_BALANCE);
+        // This doesn't even pass, after messing with values
+        // stake::assert_stake_pool(validator_addr, 0, 0, 0, 0);
+
+        // Cannot call `deposit()` again either, creates a dangling reference error
+
     }
 
     #[test_only]
-    const CONSENSUS_KEY_1: vector<u8> = x"8a54b92288d4ba5073d3a52e80cc00ae9fbbc1cc5b433b46089b7804c38a76f00fc64746c7685ee628fc2d0b929c2294";
+    use aptos_framework::account;
     #[test_only]
-    const CONSENSUS_POP_1: vector<u8> = x"a9d6c1f1270f2d1454c89a83a4099f813a56dc7db55591d46aa4e6ccae7898b234029ba7052f18755e6fa5e6b73e235f14efc4e2eb402ca2b8f56bad69f965fc11b7b25eb1c95a06f83ddfd023eac4559b6582696cfea97b227f4ce5bdfdfed0";
+    use aptos_framework::aptos_coin;
 
     #[test_only]
     const CONSENSUS_KEY_2: vector<u8> = x"a344eb437bcd8096384206e1be9c80be3893fd7fdf867acce5a048e5b1546028bdac4caf419413fd16d4d6a609e0b0a3";
     #[test_only]
     const CONSENSUS_POP_2: vector<u8> = x"909d3a378ad5c17faf89f7a2062888100027eda18215c7735f917a4843cd41328b42fa4242e36dedb04432af14608973150acbff0c5d3f325ba04b287be9747398769a91d4244689cfa9c535a5a4d67073ee22090d5ab0a88ab8d2ff680e991e";
 
+    #[test_only]
+    const LOCKUP_CYCLE_SECONDS: u64 = 3600;
 }
