@@ -389,7 +389,7 @@ module openrails::shared_stake_pool {
     // As required for all crank functions:
     // - This function cannot abort
     // - This function is indempotent; calling it more than once per epoch does nothing
-    public fun crank_on_new_epoch(this: address) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun crank_on_new_epoch(this: address) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let current_epoch = reconfiguration::current_epoch();
         let epoch_tracker = borrow_global_mut<EpochTracker>(this);
 
