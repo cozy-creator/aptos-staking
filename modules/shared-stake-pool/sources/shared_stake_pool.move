@@ -93,7 +93,6 @@ module openrails::shared_stake_pool {
 
     // ================= User entry functions =================
 
-    // Q: Why not create it via a resource account? This ties the current address to this module
     // Call to create a new SharedStakePool. Only one can exist per address
     public entry fun initialize(this: &signer) {
         let addr = signer::address_of(this);
@@ -146,7 +145,8 @@ module openrails::shared_stake_pool {
         });
     }
 
-    public entry fun deposit(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun deposit(account: &signer, this: address, amount: u64)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let coins = coin::withdraw<AptosCoin>(account, amount);
         let share = deposit_with_coins(this, coins);
 
@@ -158,7 +158,8 @@ module openrails::shared_stake_pool {
         deposit_share(addr, share);
     }
 
-    public fun deposit_with_coins(this: address, coins: Coin<AptosCoin>): Share acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public fun deposit_with_coins(this: address, coins: Coin<AptosCoin>): Share
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         crank_on_new_epoch(this);
         let coin_value = coin::value<AptosCoin>(&coins);
         if (coin_value == 0) {
@@ -180,7 +181,8 @@ module openrails::shared_stake_pool {
         share
     }
 
-    public entry fun unlock(account: &signer, this: address, coin_value: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun unlock(account: &signer, this: address, coin_value: u64)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let addr = signer::address_of(account);
 
         let tvl = borrow_global<TotalValueLocked>(this);
@@ -190,7 +192,8 @@ module openrails::shared_stake_pool {
         unlock_with_share(addr, share);
     }
 
-    public fun unlock_with_share(addr: address, share: Share) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public fun unlock_with_share(addr: address, share: Share)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let Share { addr: this, value: share_value } = share;
         crank_on_new_epoch(this);
 
@@ -217,13 +220,15 @@ module openrails::shared_stake_pool {
         stake_pool.balances.pending_inactive_shares = stake_pool.balances.pending_inactive_shares + share_value;
     }
 
-    public entry fun cancel_unlock(account: &signer, this: address, amount: u64) acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
+    public entry fun cancel_unlock(account: &signer, this: address, amount: u64)
+    acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
         let addr = signer::address_of(account);
         let share = cancel_unlock_to_share(account, this, amount);
         deposit_share(addr, share);
     }
 
-    public fun cancel_unlock_to_share(account: &signer, this: address, coin_value: u64): Share acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
+    public fun cancel_unlock_to_share(account: &signer, this: address, coin_value: u64): Share
+    acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
         crank_on_new_epoch(this);
         let addr = signer::address_of(account);
         let tvl = borrow_global<TotalValueLocked>(this);
@@ -246,12 +251,14 @@ module openrails::shared_stake_pool {
         Share { addr: this, value: share_value }
     }
 
-    public entry fun withdraw(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun withdraw(account: &signer, this: address, amount: u64)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let coin = withdraw_to_coins(account, this, amount);
         coin::deposit<AptosCoin>(signer::address_of(account), coin);
     }
 
-    public entry fun withdraw_to_coins(account: &signer, this: address, coin_value: u64): Coin<AptosCoin> acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun withdraw_to_coins(account: &signer, this: address, coin_value: u64): Coin<AptosCoin>
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         crank_on_new_epoch(this);
         if (coin_value == 0) {
             return coin::zero<AptosCoin>()
@@ -389,7 +396,8 @@ module openrails::shared_stake_pool {
     // As required for all crank functions:
     // - This function cannot abort
     // - This function is indempotent; calling it more than once per epoch does nothing
-    public fun crank_on_new_epoch(this: address) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun crank_on_new_epoch(this: address)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let current_epoch = reconfiguration::current_epoch();
         let epoch_tracker = borrow_global_mut<EpochTracker>(this);
 
@@ -716,7 +724,7 @@ module openrails::shared_stake_pool {
     // Tests >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    fun end_to_end(aptos_framework: &signer, validator: &signer, user: &signer)
+    fun test_end_to_end(aptos_framework: &signer, validator: &signer, user: &signer)
     acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         // Initial setup
         let validator_addr = signer::address_of(validator);
@@ -733,7 +741,6 @@ module openrails::shared_stake_pool {
         // Call the initialize function, rotate consensus keys
         initialize(validator);
         stake::rotate_consensus_key(validator, validator_addr, CONSENSUS_KEY_2, CONSENSUS_POP_2);
-
 
         // Mint some coins to the user
         aptos_coin::mint(aptos_framework, user_addr, 300);
@@ -769,6 +776,41 @@ module openrails::shared_stake_pool {
 
         // Cannot call `deposit()` again either, creates a dangling reference error
 
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    fun test_unlock(aptos_framework: &signer, validator: &signer, user: &signer)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+        // Initial setup
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+        account::create_account_for_test(signer::address_of(aptos_framework));
+        account::create_account_for_test(validator_addr);
+        account::create_account_for_test(user_addr);
+        reconfiguration::initialize_for_test(aptos_framework);
+        reconfiguration::reconfigure_for_test();
+        coin::register<AptosCoin>(validator);
+        coin::register<AptosCoin>(user);
+        stake::initialize_for_test_custom(aptos_framework, 100, 10000, LOCKUP_CYCLE_SECONDS, true, 1, 100, 100);
+
+        // Call the initialize function, rotate consensus keys
+        initialize(validator);
+        stake::rotate_consensus_key(validator, validator_addr, CONSENSUS_KEY_2, CONSENSUS_POP_2);
+
+        // Mint some coins to the user
+        aptos_coin::mint(aptos_framework, user_addr, 300);
+
+        // Call deposit, which stakes the tokens with the validator address
+        deposit(user, validator_addr, 200);
+
+        // Now that the validator has at least the minimum stake, it can be added to the validator set
+        stake::join_validator_set_for_test(validator, validator_addr, true);
+
+        // End the epoch, beginning a new one
+        stake::end_epoch();
+
+        // Mark 100 coins to be able to be withdrawn the next epoch
+        unlock(user, validator_addr, 20)
     }
 
     #[test_only]
