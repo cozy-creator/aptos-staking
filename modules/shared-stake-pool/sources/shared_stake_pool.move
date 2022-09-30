@@ -49,8 +49,8 @@ module openrails::shared_stake_pool {
     }
 
     struct TotalValueLocked has key {
-        coins: u128,
-        shares: u128
+        coins: u64,
+        shares: u64
     }
 
     struct Share has store {
@@ -175,8 +175,8 @@ module openrails::shared_stake_pool {
         let share_value = apt_to_share(tvl, coin_value);
         let share = Share { addr: this, value: share_value };
 
-        tvl.coins = tvl.coins + (coin_value as u128);
-        tvl.shares = tvl.shares + (share_value as u128);
+        tvl.coins = tvl.coins + coin_value;
+        tvl.shares = tvl.shares + share_value;
 
         share
     }
@@ -314,22 +314,22 @@ module openrails::shared_stake_pool {
     // ============== Helper functions ==============
 
     public fun share_to_apt(tvl: &TotalValueLocked, amount: u64): u64 {
-        (((amount as u128) / share_apt_ratio(tvl)) as u64)
+        amount / share_apt_ratio(tvl)
     }
 
     public fun apt_to_share(tvl: &TotalValueLocked, amount: u64): u64 {
-        (((amount as u128) * share_apt_ratio(tvl)) as u64)
+        amount * share_apt_ratio(tvl)
     }
 
     // We assume that crank_on_new_epoch has been called, otherwise this will
     // understimate the number of coins we have, and give an inferior price
     // This is not a security risk, but if slashing is ever introduced, this should be changed
     // to check the crank, as it might be possible we have fewer coins than expected
-    public fun share_apt_ratio(tvl: &TotalValueLocked): u128 {
+    public fun share_apt_ratio(tvl: &TotalValueLocked): u64 {
         if (tvl.coins == 0 || tvl.shares == 0) {
             1
         } else {
-            ((tvl.shares as u128) / (tvl.coins as u128))
+            tvl.shares / tvl.coins
         }
     }
 
@@ -448,7 +448,7 @@ module openrails::shared_stake_pool {
 
         // Update our coins balance to account for rewards
         let tvl = borrow_global_mut<TotalValueLocked>(this);
-        tvl.coins = (active as u128) + (pending_inactive as u128);
+        tvl.coins = active + pending_inactive;
 
         // issue shares to pay the operator
         let operator_fee = calculate_operator_fee(this, rewards_amount, &stake_pool.operator_agreement, stake_pool.validator_status);
@@ -546,10 +546,10 @@ module openrails::shared_stake_pool {
         };
 
         let tvl = borrow_global_mut<TotalValueLocked>(pool_addr);
-        let share_value = ((coin_value as u128) * tvl.shares / (tvl.coins - (coin_value as u128)) as u64);
+        let share_value = coin_value * tvl.shares / (tvl.coins - coin_value);
 
-        let share = Share { addr: pool_addr, value: (share_value as u64) };
-        tvl.shares = tvl.shares + (share_value as u128);
+        let share = Share { addr: pool_addr, value: share_value };
+        tvl.shares = tvl.shares + share_value;
         deposit_share(recipient, share);
     }
 
@@ -567,8 +567,8 @@ module openrails::shared_stake_pool {
             // inactive stake no longer earns interest, and is considered redeemed
             // convert all pending_inactive shares to inactive coins
             let coin_value = share_to_apt(tvl, share_value);
-            tvl.coins = tvl.coins - (coin_value as u128);
-            tvl.shares = tvl.shares - (share_value as u128);
+            tvl.coins = tvl.coins - coin_value;
+            tvl.shares = tvl.shares - share_value;
 
             if (simple_map::contains_key(&inactive_map, addr)) {
                 let inactive_balance = simple_map::borrow_mut(&mut inactive_map, addr);
