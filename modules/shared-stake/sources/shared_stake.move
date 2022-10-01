@@ -56,6 +56,10 @@ module openrails::shared_stake {
 
     // All of our public interface values are priced in APT (Aptos coin) not shares; shares
     // are our own internal ledger, and their values do not need to be exposed to users
+    // share.value represents fractional ownership of a stake pool, it is not the number of
+    // APT (Aptos coin) that that share is redeemable for.
+    // I.e., if you have share.value = 10, out of a total pool with 100 shares, then you own
+    // 10% of that stake pool's staked APT, whatever that amount is.
     struct Share has store {
         addr: address,
         value: u64

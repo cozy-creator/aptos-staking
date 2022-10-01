@@ -1,3 +1,5 @@
+![Stake Router](./static/stake_router_octopie_small.png 'Stake Router')
+
 ## Shared Stake Pool by OpenRails
 
 ### Disclaimer!
@@ -95,6 +97,7 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 ### TO DO
 
 - Extract iterable map into its own module
+- Rename 'share' to 'StakeShare' and Share.value to StakeShare.share_value (???)
 - Write share chest to be an iterable map
 - Make the apt_to_share function borrow TVL itself rather than being sent it
 - Add full spec file
