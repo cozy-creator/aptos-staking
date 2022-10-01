@@ -71,17 +71,6 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 
 - On Aptos, epochs are measured in seconds, not blocks produced.
 
-### TO DO STILL
-
-- Add full spec file
-- Add 100% unit test coverage
-- consider scenarios where the StakePool is inactive / pending_active, so that it's not part of the current validator set. Make sure everything is consistent
-- write governance sample module
-- Add events, in particular around unlocks, rewards, and payments
-- Typescript interfaces for external functions calling in
-- export the shareholder table such that it can be used in governance
-- operators should be able to be paid in stablecoins or other coins if they prefer
-
 ### How to publish
 
 - Go into the module you want to use (i.e., modules/shared-stake-pools)
@@ -102,3 +91,17 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 - initialize a stake pool: 168
 - deposit into stake pool: 157
 - turn the crank: ???
+
+### TO DO
+
+- Extract iterable map into its own module
+- Write share chest to be an iterable map
+- Make the apt_to_share function borrow TVL itself rather than being sent it
+- Add full spec file
+- Add 100% unit test coverage
+- consider scenarios where the StakePool is inactive / pending_active, so that it's not part of the current validator set. Make sure everything is consistent
+- write governance sample module
+- Add events, in particular around unlocks, rewards, and payments
+- Typescript interfaces for external functions calling in
+- export the shareholder table such that it can be used in governance
+- operators should be able to be paid in stablecoins or other coins if they prefer

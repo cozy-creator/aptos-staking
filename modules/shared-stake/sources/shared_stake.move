@@ -1,6 +1,8 @@
-// Designed for independent validators receiving stake from up to 65,536 stakeholders
+// Designed for independent validators and validator-networks (liquid staking protocols)
+// There is no limit to the number of individual stakers, however
+// only 65,536 users can deposit or stake per shared_stake_pool per epoch
 
-module openrails::shared_stake_pool {
+module openrails::shared_stake {
     use std::signer;
     use std::vector;
     use std::error;
@@ -28,7 +30,6 @@ module openrails::shared_stake_pool {
     const EGOVERNANCE_NOT_FOUND: u64 = 6;
     const ENO_SHARE_CHEST_FOUND: u64 = 7;
     const ENO_SHARE_FOUND: u64 = 8;
-    const EINVALID_BALANCE: u64 = 9;
 
     /// Validator status enums.
     const VALIDATOR_STATUS_PENDING_ACTIVE: u64 = 1;
@@ -53,6 +54,8 @@ module openrails::shared_stake_pool {
         shares: u128
     }
 
+    // All of our public interface values are priced in APT (Aptos coin) not shares; shares
+    // are our own internal ledger, and their values do not need to be exposed to users
     struct Share has store {
         addr: address,
         value: u64
@@ -93,16 +96,15 @@ module openrails::shared_stake_pool {
 
     // ================= User entry functions =================
 
-    // Q: Why not create it via a resource account? This ties the current address to this module
     // Call to create a new SharedStakePool. Only one can exist per address
     public entry fun initialize(this: &signer) {
         let addr = signer::address_of(this);
         assert!(!exists<SharedStakePool>(addr), error::invalid_argument(EALREADY_REGISTERED));
 
         stake::initialize_stake_owner(this, 0, addr, addr);
-        
+
         let owner_cap = stake::extract_owner_cap(this);
-        
+
         move_to(this, SharedStakePool {
             owner_cap,
             pending_inactive_shares: IterableMap {
@@ -135,18 +137,19 @@ module openrails::shared_stake_pool {
             coins: 0,
             shares: 0
         });
-        
+
         move_to(this, EpochTracker {
             epoch: reconfiguration::current_epoch(),
             locked_until_secs: stake::get_lockup_secs(addr)
         });
-        
+
         move_to(this, GovernanceCapability {
             pool_addr: addr
         });
     }
 
-    public entry fun deposit(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun deposit(account: &signer, this: address, amount: u64)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let coins = coin::withdraw<AptosCoin>(account, amount);
         let share = deposit_with_coins(this, coins);
 
@@ -155,10 +158,11 @@ module openrails::shared_stake_pool {
             move_to(account, ShareChest { inner: vector::empty<Share>() });
         };
 
-        deposit_share(addr, share);
+        store_share(addr, share);
     }
 
-    public fun deposit_with_coins(this: address, coins: Coin<AptosCoin>): Share acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public fun deposit_with_coins(this: address, coins: Coin<AptosCoin>): Share
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         crank_on_new_epoch(this);
         let coin_value = coin::value<AptosCoin>(&coins);
         if (coin_value == 0) {
@@ -168,7 +172,12 @@ module openrails::shared_stake_pool {
 
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
         stake::add_stake_with_cap(&stake_pool.owner_cap, coins);
-        stake_pool.balances.pending_active = stake_pool.balances.pending_active + coin_value;
+
+        if (stake::is_current_epoch_validator(this)) {
+            stake_pool.balances.pending_active = stake_pool.balances.pending_active + coin_value;
+        } else {
+            stake_pool.balances.active = stake_pool.balances.active + coin_value;
+        };
 
         let tvl = borrow_global_mut<TotalValueLocked>(this);
         let share_value = apt_to_share(tvl, coin_value);
@@ -180,17 +189,15 @@ module openrails::shared_stake_pool {
         share
     }
 
-    public entry fun unlock(account: &signer, this: address, coin_value: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun unlock(account: &signer, this: address, coin_value: u64)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let addr = signer::address_of(account);
-
-        let tvl = borrow_global<TotalValueLocked>(this);
-        let share_value = apt_to_share(tvl, coin_value);
-        let share = withdraw_share(account, this, share_value);
-
+        let share = extract_share(account, this, coin_value);
         unlock_with_share(addr, share);
     }
 
-    public fun unlock_with_share(addr: address, share: Share) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public fun unlock_with_share(addr: address, share: Share)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let Share { addr: this, value: share_value } = share;
         crank_on_new_epoch(this);
 
@@ -217,13 +224,15 @@ module openrails::shared_stake_pool {
         stake_pool.balances.pending_inactive_shares = stake_pool.balances.pending_inactive_shares + share_value;
     }
 
-    public entry fun cancel_unlock(account: &signer, this: address, amount: u64) acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
+    public entry fun cancel_unlock(account: &signer, this: address, amount: u64)
+    acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
         let addr = signer::address_of(account);
         let share = cancel_unlock_to_share(account, this, amount);
-        deposit_share(addr, share);
+        store_share(addr, share);
     }
 
-    public fun cancel_unlock_to_share(account: &signer, this: address, coin_value: u64): Share acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
+    public fun cancel_unlock_to_share(account: &signer, this: address, coin_value: u64): Share
+    acquires SharedStakePool, EpochTracker, ShareChest, TotalValueLocked {
         crank_on_new_epoch(this);
         let addr = signer::address_of(account);
         let tvl = borrow_global<TotalValueLocked>(this);
@@ -246,12 +255,14 @@ module openrails::shared_stake_pool {
         Share { addr: this, value: share_value }
     }
 
-    public entry fun withdraw(account: &signer, this: address, amount: u64) acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun withdraw(account: &signer, this: address, amount: u64)
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let coin = withdraw_to_coins(account, this, amount);
         coin::deposit<AptosCoin>(signer::address_of(account), coin);
     }
 
-    public entry fun withdraw_to_coins(account: &signer, this: address, coin_value: u64): Coin<AptosCoin> acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
+    public entry fun withdraw_to_coins(account: &signer, this: address, coin_value: u64): Coin<AptosCoin>
+    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         crank_on_new_epoch(this);
         if (coin_value == 0) {
             return coin::zero<AptosCoin>()
@@ -264,7 +275,7 @@ module openrails::shared_stake_pool {
         if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE) {
             // In this case, we can move coins straight from active -> pending_inactive -> inactive -> withdrawn
             if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
-                let inactive_coins_value = if (simple_map::contains_key(&stake_pool.inactive_coins.map, &addr)) { 
+                let inactive_coins_value = if (simple_map::contains_key(&stake_pool.inactive_coins.map, &addr)) {
                     *simple_map::borrow(&stake_pool.inactive_coins.map, &addr)
                 }
                 else {
@@ -326,7 +337,15 @@ module openrails::shared_stake_pool {
         }
     }
 
-    public fun deposit_share(user_addr: address, share: Share) acquires ShareChest {
+    // TO DO: query a switchboard oracle to find the USD price at the given timestamp
+    // We should also add in the option to swap rewards into other coins
+    public fun convert_usd_to_apt(amount: u64, _time: u64): u64 {
+        amount
+    }
+
+    // ================= Interact with ShareChest =================
+
+    public fun store_share(user_addr: address, share: Share) acquires ShareChest {
         assert!(exists<ShareChest>(user_addr), ENO_SHARE_CHEST_FOUND);
         let share_chest = &mut borrow_global_mut<ShareChest>(user_addr).inner;
 
@@ -348,12 +367,14 @@ module openrails::shared_stake_pool {
         vector::push_back<Share>(share_chest, share);
     }
 
-    // share_value is the number of shares you want to withdraw, not the number of coin
-    public fun withdraw_share(account: &signer, pool_addr: address, share_value: u64): Share acquires ShareChest {
+    // coin_value is the number of coins you want to withdraw, not the number of shares
+    public fun extract_share(account: &signer, pool_addr: address, coin_value: u64): Share acquires ShareChest, TotalValueLocked {
         let user_addr = signer::address_of(account);
         assert!(exists<ShareChest>(user_addr), ENO_SHARE_CHEST_FOUND);
         let share_chest = &mut borrow_global_mut<ShareChest>(user_addr).inner;
-        
+        let tvl = borrow_global<TotalValueLocked>(pool_addr);
+        let share_value = apt_to_share(tvl, coin_value);
+
         let i = 0;
         let len = vector::length(share_chest);
         while (i < len) {
@@ -379,6 +400,35 @@ module openrails::shared_stake_pool {
         Share { addr: pool_addr, value: 0 }
     }
 
+    // Returns a user's staked APT balance in the specified pool address.
+    // This includes pending_active and active balances, but not pending_inactive or inactive
+    // balances. Remember that share-resources are destroyed when you unlock
+    public fun get_stake_balance(pool_addr: address, user_addr: address): u64 acquires ShareChest, TotalValueLocked {
+        if (!exists<ShareChest>(user_addr)) {
+            return 0
+        };
+
+        let share_chest = &borrow_global<ShareChest>(user_addr).inner;
+        let len = vector::length(share_chest);
+        let i = 0;
+        while (i < len) {
+            let stored_share = vector::borrow(share_chest, i);
+            if (stored_share.addr == pool_addr) {
+                return (get_stake_balance_of_share(stored_share))
+            };
+
+            i = i + 1;
+        };
+
+        return 0
+    }
+
+    public fun get_stake_balance_of_share(share: &Share): u64 acquires TotalValueLocked {
+        let tvl = borrow_global<TotalValueLocked>(share.addr);
+        return share_to_apt(tvl, share.value)
+    }
+
+    // ================= Crank Functions =================
 
     // This should be run once every epoch, otherwise:
     // - new stakers will not earn interest for the missed epoch,
@@ -542,7 +592,7 @@ module openrails::shared_stake_pool {
 
         let share = Share { addr: pool_addr, value: (share_value as u64) };
         tvl.shares = tvl.shares + (share_value as u128);
-        deposit_share(recipient, share);
+        store_share(recipient, share);
     }
 
     // crank sub-function. Cannot abort
@@ -664,7 +714,7 @@ module openrails::shared_stake_pool {
         epoch_tracker.locked_until_secs = new_locked_until_secs;
     }
 
-    // ================= Utility functions =================
+    // ================= Iterable Map =================
 
     fun add_to_iterable_map(iterable_map: &mut IterableMap, addr: address, amount: u64) {
         let map = &mut iterable_map.map;
@@ -699,88 +749,16 @@ module openrails::shared_stake_pool {
         };
     }
 
-    public fun is_active_validator(status: u64): bool {
-        if (status == VALIDATOR_STATUS_PENDING_ACTIVE || status == VALIDATOR_STATUS_INACTIVE) {
-            return false
-        };
+    // ================= For Testing =================
 
-        return true
+    #[test_only]
+    const EINCORRECT_BALANCE: u64 = 9;
+
+    #[test_only]
+    public fun assert_balances(pool_addr: address, active: u64, pending_active: u64, pending_inactive_shares: u64) acquires SharedStakePool {
+        let shared_stake_pool = borrow_global<SharedStakePool>(pool_addr);
+        assert!(shared_stake_pool.balances.active == active, EINCORRECT_BALANCE);
+        assert!(shared_stake_pool.balances.pending_active == pending_active, EINCORRECT_BALANCE);
+        assert!(shared_stake_pool.balances.pending_inactive_shares == pending_inactive_shares, EINCORRECT_BALANCE);
     }
-
-    // TO DO: query a switchboard oracle to find the USD price at the given timestamp
-    // We should also add in the option to swap rewards into other coins
-    public fun convert_usd_to_apt(amount: u64, _time: u64): u64 {
-        amount
-    }
-
-    // Tests >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
-    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    fun end_to_end(aptos_framework: &signer, validator: &signer, user: &signer)
-    acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
-        // Initial setup
-        let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
-        account::create_account_for_test(signer::address_of(aptos_framework));
-        account::create_account_for_test(validator_addr);
-        account::create_account_for_test(user_addr);
-        reconfiguration::initialize_for_test(aptos_framework);
-        reconfiguration::reconfigure_for_test();
-        coin::register<AptosCoin>(validator);
-        coin::register<AptosCoin>(user);
-        stake::initialize_for_test_custom(aptos_framework, 100, 10000, LOCKUP_CYCLE_SECONDS, true, 1, 100, 100);
-
-        // Call the initialize function, rotate consensus keys
-        initialize(validator);
-        stake::rotate_consensus_key(validator, validator_addr, CONSENSUS_KEY_2, CONSENSUS_POP_2);
-
-
-        // Mint some coins to the user
-        aptos_coin::mint(aptos_framework, user_addr, 300);
-
-        // Call deposit, which stakes the tokens with the validator address
-        deposit(user, validator_addr, 100);
-
-        // Now that the validator has at least the minimum stake, it can be added to the validator set
-        stake::join_validator_set_for_test(validator, validator_addr, true);
-
-        // Assert that the balance in pending_active is the amount deposited, and the balance in active is still 0
-        let shared_stake_pool = borrow_global<SharedStakePool>(validator_addr);
-        assert!(shared_stake_pool.balances.pending_active == 100, EINVALID_BALANCE);
-        assert!(shared_stake_pool.balances.active == 0, EINVALID_BALANCE);
-        // This is weird.. below the test passes but shouldn't it go to pending_active in this epoch first?
-        stake::assert_stake_pool(validator_addr, 100, 0, 0, 0);
-
-        // Assert that the user received shares equal to the initial deposit amount (100)
-        let share_chest = borrow_global<ShareChest>(user_addr);
-        let user_share = vector::borrow(&share_chest.inner, 0);
-        let user_share_value = user_share.value;
-        assert!(user_share_value == 100, EINVALID_BALANCE);
-
-        // End the epoch, beginning a new one
-        stake::end_epoch();
-
-        // Check the balances
-        // This is wrong. The 100 coin balance should be in active now
-        assert!(shared_stake_pool.balances.pending_active == 100, EINVALID_BALANCE);
-        assert!(shared_stake_pool.balances.active == 0, EINVALID_BALANCE);
-        // This doesn't even pass, after messing with values
-        // stake::assert_stake_pool(validator_addr, 0, 0, 0, 0);
-
-        // Cannot call `deposit()` again either, creates a dangling reference error
-
-    }
-
-    #[test_only]
-    use aptos_framework::account;
-    #[test_only]
-    use aptos_framework::aptos_coin;
-
-    #[test_only]
-    const CONSENSUS_KEY_2: vector<u8> = x"a344eb437bcd8096384206e1be9c80be3893fd7fdf867acce5a048e5b1546028bdac4caf419413fd16d4d6a609e0b0a3";
-    #[test_only]
-    const CONSENSUS_POP_2: vector<u8> = x"909d3a378ad5c17faf89f7a2062888100027eda18215c7735f917a4843cd41328b42fa4242e36dedb04432af14608973150acbff0c5d3f325ba04b287be9747398769a91d4244689cfa9c535a5a4d67073ee22090d5ab0a88ab8d2ff680e991e";
-
-    #[test_only]
-    const LOCKUP_CYCLE_SECONDS: u64 = 3600;
 }
