@@ -761,4 +761,58 @@ module openrails::shared_stake {
         assert!(shared_stake_pool.balances.pending_active == pending_active, EINCORRECT_BALANCE);
         assert!(shared_stake_pool.balances.pending_inactive_shares == pending_inactive_shares, EINCORRECT_BALANCE);
     }
+
+    #[test_only]
+    public entry fun initialize_for_test(aptos_framework: &signer, validator: &signer) {
+        let validator_addr = signer::address_of(validator);
+        assert!(!exists<SharedStakePool>(validator_addr), error::invalid_argument(EALREADY_REGISTERED));
+
+        // stake::initialize_stake_owner(validator, 0, validator_addr, validator_addr);
+        stake::initialize_for_test(aptos_framework);
+        stake::initialize_test_validator(validator, 0, false, false);
+
+        let owner_cap = stake::extract_owner_cap(validator);
+
+        move_to(validator, SharedStakePool {
+            owner_cap,
+            pending_inactive_shares: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            inactive_coins: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            balances: Balances {
+                active: 0,
+                pending_active: 0,
+                pending_inactive_shares: 0,
+            },
+            share_to_unlock_next_epoch: 0,
+            operator_agreement: OperatorAgreement {
+                operator: validator_addr,
+                monthly_fee_usd: 0,
+                performance_fee_bps: 500,
+                last_paid_secs: 0,
+                epoch_effective: 0
+            },
+            pending_operator_agreement: option::none(),
+            validator_status: VALIDATOR_STATUS_INACTIVE,
+            performance_log: vector::empty<u128>()
+        });
+
+        move_to(validator, TotalValueLocked {
+            coins: 0,
+            shares: 0
+        });
+
+        move_to(validator, EpochTracker {
+            epoch: reconfiguration::current_epoch(),
+            locked_until_secs: stake::get_lockup_secs(validator_addr)
+        });
+
+        move_to(validator, GovernanceCapability {
+            pool_addr: validator_addr
+        });
+    }
 }
