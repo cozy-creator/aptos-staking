@@ -61,8 +61,22 @@ module openrails::shared_stake_tests {
 
     public fun new_epoch() {
         stake::end_epoch();
-        reconfiguration::reconfigure_for_test_custom()
+        reconfiguration::reconfigure_for_test_custom();
+        // shared_stake::crank_on_new_epoch(validator_addr);
         // reconfiguration::reconfigure_for_test();
+    }
+
+    public fun assert_expected_balances(user_addr: address, validator_addr: address, user_coin: u64, active_coin: u64, inactive_coin: u64, pending_active_coin: u64, pending_inactive_coin: u64, total_shares: u64, pending_inactive_shares: u64, user_staked_coin: u64) {
+        assert!(coin::balance<AptosCoin>(user_addr) == user_coin, EINCORRECT_BALANCE);
+
+        stake::assert_stake_pool(validator_addr, active_coin, inactive_coin, pending_active_coin, pending_inactive_coin);
+
+        shared_stake::assert_balances(validator_addr, active_coin, pending_active_coin, pending_inactive_shares);
+
+        shared_stake::assert_tvl(validator_addr, (total_shares as u128), ((active_coin + pending_active_coin + pending_inactive_coin) as u128));
+
+        let staked_balance = shared_stake::get_stake_balance(validator_addr, user_addr);
+        assert!(staked_balance == user_staked_coin, EINCORRECT_BALANCE);
     }
 
     // ================= Tests =================
@@ -77,95 +91,96 @@ module openrails::shared_stake_tests {
         // Mint some coins to the user
         aptos_coin::mint(aptos_framework, user_addr, 500);
 
-        // Call deposit, which stakes the tokens with the validator address
-        shared_stake::deposit(user, validator_addr, 100);
-        assert!(coin::balance<AptosCoin>(user_addr) == 400, EINCORRECT_BALANCE);
-
+        // Deposit coin, which stakes the tokens with the validator address
         // Because the validator is currently not part of the validator set, any deposited stake
         // should go immediately into active, not pending_active
-        stake::assert_validator_state(validator_addr, 100, 0, 0, 0, 0);
-        stake::assert_stake_pool(validator_addr, 100, 0, 0, 0);
-        shared_stake::assert_balances(validator_addr, 100, 0, 0);
+        shared_stake::deposit(user, validator_addr, 100);
+        assert_expected_balances(user_addr, validator_addr, 400, 100, 0, 0, 0, 100, 0, 100);
 
-        // Assert that the user now has shares equivalent to the initial deposit amount (100)
-        let user_stake = shared_stake::get_stake_balance(validator_addr, user_addr);
-        assert!(user_stake == 100, EINCORRECT_BALANCE);
-
-        // Examine the share's value directly; we should be able to extract and store shares
-        let share = shared_stake::extract_share(user, validator_addr, user_stake);
-        let share_value_in_apt = shared_stake::get_stake_balance_of_share(&share);
-        assert!(share_value_in_apt == user_stake, EINCORRECT_BALANCE);
-        shared_stake::store_share(user_addr, share);
-
-        // Now that the validator has at least the minimum stake, it can be added to the validator set
+        // Minimum stake met, join validator set
         stake::join_validator_set(validator, validator_addr);
 
         // We should be in the pending_active validator set
         assert!(!stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
 
-        // End the epoch 0, start epoch 1
+        // ===== End the epoch 0, start epoch 1
         new_epoch();
 
         // We should now be in the active validator set
         assert!(stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
         assert!(stake::get_remaining_lockup_secs(validator_addr) == LOCKUP_CYCLE_SECONDS, 1);
 
-        // End the epoch 1, earn our first reward, start epoch 2, and check the balances
+        // Balances are unchanged
+        assert_expected_balances(user_addr, validator_addr, 400, 100, 0, 0, 0, 100, 0, 100);
+
+        // ===== End epoch 1, earn our first reward, start epoch 2
+        // If we do not call a shared_stake command, we must crank, otherwise shared_stake
+        // balances will be outdated. (Crank updates balances.)
         new_epoch();
-        assert!(stake::get_validator_state(validator_addr) == VALIDATOR_STATUS_ACTIVE, 3);
-        stake::assert_validator_state(validator_addr, 101, 0, 0, 0, 0);
-        stake::assert_stake_pool(validator_addr, 101, 0, 0, 0);
-        let (active, _, _, _) = stake::get_stake(validator_addr);
-        assert!(active == 101, 10);
-        // shared stake has to be cranked, or else its internal balance will be out of date
         shared_stake::crank_on_new_epoch(validator_addr);
-        shared_stake::assert_balances(validator_addr, 101, 0, 0);
 
-        // Deposit some coins. Now that the validator status is active, the coins will be deposited into pending active first
-        shared_stake::deposit(user, validator_addr, 100);
-        assert!(coin::balance<AptosCoin>(user_addr) == 300, EINCORRECT_BALANCE);
-        stake::assert_validator_state(validator_addr, 101, 0, 100, 0, 0);
+        // active increases by 1 from staking reward
+        assert_expected_balances(user_addr, validator_addr, 400, 101, 0, 0, 0, 100, 0, 101);
 
-        // Assert that the user now has coins from new deposit (100), old deposit (100) and interest (1)
-        shared_stake::assert_balances(validator_addr, 101, 100, 0);
-        let user_stake = shared_stake::get_stake_balance(validator_addr, user_addr);
-        assert!(user_stake == 201, EINCORRECT_BALANCE);
+        shared_stake::deposit(user, validator_addr, 50);
 
-        // End the epoch 2, start epoch 3
+        // user balance decreases, pending_active increases, total coins increases,
+        // total shares increases
+        assert_expected_balances(user_addr, validator_addr, 350, 101, 0, 50, 0, 149, 0, 151);
+
+        // ===== End the epoch 2, start epoch 3
         new_epoch();
-        stake::assert_validator_state(validator_addr, 202, 0, 0, 0, 0);
+        shared_stake::crank_on_new_epoch(validator_addr);
 
-        // Now, let's deposit and unlock some coins in the same epoch
-        shared_stake::deposit(user, validator_addr, 100);
-        assert!(coin::balance<AptosCoin>(user_addr) == 200, EINCORRECT_BALANCE);
-        stake::assert_validator_state(validator_addr, 202, 0, 100, 0, 0);
-        let user_stake = shared_stake::get_stake_balance(validator_addr, user_addr);
-        assert!(user_stake == 300, EINCORRECT_BALANCE);
+        // pending_active moves to active, stake reward
+        assert_expected_balances(user_addr, validator_addr, 350, 152, 0, 0, 0, 149, 0, 152);
 
         shared_stake::unlock(user, validator_addr, 100);
-        assert!(coin::balance<AptosCoin>(user_addr) == 200, EINCORRECT_BALANCE);
-        debug::print(&9999);
-        stake::assert_validator_state(validator_addr, 102, 0, 100, 100, 0); // <--- ERROR HERE
-        let user_stake = shared_stake::get_stake_balance(validator_addr, user_addr);
-        assert!(user_stake == 202, EINCORRECT_BALANCE);
 
-        // End epoch 3, start epoch 4
+        // active moves to pending_inactive, pending_inactive_shares goes to 98
+        // stake_balance also decreases to 52
+        // Note that although we requested 100 coins, we only get 99 due to integer
+        // arithmetic, which truncates any decimals
+        // This 1 coin will effectively be kept in the active pool forever; the user went from
+        // 152 active to 52 active, 99 unlocking
+        assert_expected_balances(user_addr, validator_addr, 350, 53, 0, 0, 99, 149, 98, 52);
+
+        shared_stake::deposit(user, validator_addr, 100);
+
+        // Coin increases by 100, shares increases by 98. User balance increases by 100
+        assert_expected_balances(user_addr, validator_addr, 250, 53, 0, 100, 99, 247, 98, 152);
+
+        debug::print(&2222222222);
+
+        // ===== End epoch 3, start epoch 4
         new_epoch();
-        stake::assert_validator_state(validator_addr, 203, 0, 0, 101, 0);
+        shared_stake::crank_on_new_epoch(validator_addr);
 
-        // Once unlocked, and coins are in pending_inactive, coins will accrue there instead of active
+        // No reward received, pending_active moves to active
+        // TO DO: Why was no reward received?
+        assert_expected_balances(user_addr, validator_addr, 250, 153, 0, 0, 99, 247, 98, 152);
 
-        // Flashforward to the lockup cycle ending, and check the balances again
+        debug::print(&77777777777);
+
+        // Fast-forward to our lockup cycle ending
         timestamp::fast_forward_seconds(LOCKUP_CYCLE_SECONDS);
 
-        debug::print(&7777);
-
-        // End epoch 4, start epoch 5
+        // ===== End epoch 4, start epoch 5
         new_epoch();
-        stake::assert_validator_state(validator_addr, 205, 102, 0, 0, 0);
+        shared_stake::crank_on_new_epoch(validator_addr);
 
-        // Now that the stake is in inactive, it should be able to be withdrawn
-        shared_stake::withdraw(user, validator_addr, 100);
+        // +1 reward received, pending_inactive moves to inactive
+        // pending_inactive_shares go to 0, decreasing the total supply of shares by 98
+        // user balance is corrected to 154
+        assert_expected_balances(user_addr, validator_addr, 250, 154, 99, 0, 0, 149, 0, 154);
+
+        // // Now that the stake is in inactive, it should be able to be withdrawn
+        shared_stake::withdraw(user, validator_addr, 99);
+
+        assert_expected_balances(user_addr, validator_addr, 349, 154, 0, 0, 0, 149, 0, 154);
+
+        // We need to test cancel_unlock as well
+        //
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user1 = @0x456, user2 = @0x789)]
@@ -380,4 +395,10 @@ module openrails::shared_stake_tests {
         shared_stake::deposit(user, validator_addr, 10001);
         stake::join_validator_set(validator, validator_addr);
     }
+
+    // We should test extracting and depositing shares
+        // let share = shared_stake::extract_share(user, validator_addr, user_stake);
+        // let share_value_in_apt = shared_stake::get_stake_balance_of_share(&share);
+        // assert!(share_value_in_apt == user_stake, EINCORRECT_BALANCE);
+        // shared_stake::store_share(user_addr, share);
 }
