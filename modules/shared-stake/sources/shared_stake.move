@@ -195,23 +195,24 @@ module openrails::shared_stake {
 
     public entry fun unlock(account: &signer, this: address, coin_value: u64)
     acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
-        let addr = signer::address_of(account);
+        let user_addr = signer::address_of(account);
         let share = extract_share(account, this, coin_value);
-        unlock_with_share(addr, share);
+        unlock_with_share(user_addr, share);
     }
 
-    public fun unlock_with_share(addr: address, share: Share)
+    // user_addr is the address of the user who will be able to claim the coins when the
+    // unlock completes
+    public fun unlock_with_share(user_addr: address, share: Share)
     acquires EpochTracker, SharedStakePool, TotalValueLocked, ShareChest {
         let Share { addr: this, value: share_value } = share;
         crank_on_new_epoch(this);
 
         let tvl = borrow_global<TotalValueLocked>(this);
         let coin_value = share_to_apt(tvl, share_value);
-        let (active, _, _, _) = stake::get_stake(this);
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
 
         // this stake_pool doesn't have enough active balance to unlock; queue the unlock
-        if (active < coin_value) {
+        if (stake_pool.balances.active < coin_value) {
             stake_pool.share_to_unlock_next_epoch = stake_pool.share_to_unlock_next_epoch + share_value;
         } else {
             stake::unlock_with_cap(coin_value, &stake_pool.owner_cap);
@@ -224,7 +225,7 @@ module openrails::shared_stake {
         //
         // Note: even if our validator is not active, aptos_framework::stake will still move stake from
         // active to pending_inactive, rather than straight to inactive
-        add_to_iterable_map(&mut stake_pool.pending_inactive_shares, addr, share_value);
+        add_to_iterable_map(&mut stake_pool.pending_inactive_shares, user_addr, share_value);
         stake_pool.balances.pending_inactive_shares = stake_pool.balances.pending_inactive_shares + share_value;
     }
 
@@ -321,23 +322,30 @@ module openrails::shared_stake {
 
     // ============== Helper functions ==============
 
-    public fun share_to_apt(tvl: &TotalValueLocked, amount: u64): u64 {
-        (((amount as u128) / share_apt_ratio(tvl)) as u64)
-    }
-
-    public fun apt_to_share(tvl: &TotalValueLocked, amount: u64): u64 {
-        (((amount as u128) * share_apt_ratio(tvl)) as u64)
-    }
-
-    // We assume that crank_on_new_epoch has been called, otherwise this will
+    // Instead of borrowing TotalValueLocked here (tvl), we supply it. This allows
+    // us to simulate different points in time with different tvls.
+    //
+    // Note that the tvl must be up to date for these numbers to be accuate.
+    //
+    // We assume that crank_on_new_epoch has been called to update tvl, otherwise this will
     // understimate the number of coins we have, and give an inferior price
-    // This is not a security risk, but if slashing is ever introduced, this should be changed
-    // to check the crank, as it might be possible we have fewer coins than expected
-    public fun share_apt_ratio(tvl: &TotalValueLocked): u128 {
-        if (tvl.coins == 0 || tvl.shares == 0) {
-            1
+    // 
+    // This does not allow theft of funds, but if slashing is ever introduced,
+    // this should be changed to check the crank, as it might be possible we have fewer
+    // coins than expected
+    public fun share_to_apt(tvl: &TotalValueLocked, shares: u64): u64 {
+        if (tvl.shares == 0 || tvl.coins == 0) {
+            shares
         } else {
-            ((tvl.shares as u128) / (tvl.coins as u128))
+            (((shares as u128) * tvl.coins / tvl.shares) as u64)
+        }
+    }
+
+    public fun apt_to_share(tvl: &TotalValueLocked, coins: u64): u64 {
+        if (tvl.shares == 0 || tvl.coins == 0) {
+            coins
+        } else {
+            (((coins as u128) * tvl.shares / tvl.coins) as u64)
         }
     }
 
@@ -405,7 +413,7 @@ module openrails::shared_stake {
     }
 
     // Returns a user's staked APT balance in the specified pool address.
-    // This includes pending_active and active balances, but not pending_inactive or inactive
+    // This includes pending_active and active balances, but NOT pending_inactive or inactive
     // balances. Remember that share-resources are destroyed when you unlock
     public fun get_stake_balance(pool_addr: address, user_addr: address): u64 acquires ShareChest, TotalValueLocked {
         if (!exists<ShareChest>(user_addr)) {
@@ -485,11 +493,14 @@ module openrails::shared_stake {
             0
         };
 
-        let performance = (rewards_amount as u128) / (stake_before_rewards as u128);
-        vector::push_back(&mut stake_pool.performance_log, performance);
-        // only stores the last 10 epochs
-        if (vector::length(&stake_pool.performance_log) > 10) {
-            vector::remove(&mut stake_pool.performance_log, 0);
+        if (stake_before_rewards > 0) {
+            let performance = (rewards_amount as u128) / (stake_before_rewards as u128);
+            vector::push_back(&mut stake_pool.performance_log, performance);
+
+            // only stores the last 10 epochs
+            if (vector::length(&stake_pool.performance_log) > 10) {
+                vector::remove(&mut stake_pool.performance_log, 0);
+            };
         };
 
         // Update our coins balance to account for rewards
@@ -524,6 +535,7 @@ module openrails::shared_stake {
         // update our cached values
         let (active, _, pending_active, _) = stake::get_stake(this);
         stake_pool.balances.active = active;
+        // pending_active should always be 0, because it is added to active every epoch
         stake_pool.balances.pending_active = pending_active;
         stake_pool.operator_agreement.last_paid_secs = reconfiguration::last_reconfiguration_time() / MICRO_CONVERSION_FACTOR;
         stake_pool.validator_status = stake::get_validator_state(this);
@@ -601,13 +613,13 @@ module openrails::shared_stake {
 
     // crank sub-function. Cannot abort
     fun move_pending_inactive_to_inactive(stake_pool: &mut SharedStakePool, tvl: &mut TotalValueLocked) {
-        let addresses = stake_pool.pending_inactive_shares.list;
-        let inactive_map = stake_pool.inactive_coins.map;
+        let addresses = &stake_pool.pending_inactive_shares.list;
+        let inactive_map = &mut stake_pool.inactive_coins.map;
 
         let i = 0;
-        let len = vector::length(&addresses);
+        let len = vector::length(addresses);
         while (i < len) {
-            let addr = vector::borrow(&addresses, i);
+            let addr = vector::borrow(addresses, i);
             let share_value = *simple_map::borrow(&stake_pool.pending_inactive_shares.map, addr);
 
             // inactive stake no longer earns interest, and is considered redeemed
@@ -616,12 +628,12 @@ module openrails::shared_stake {
             tvl.coins = tvl.coins - (coin_value as u128);
             tvl.shares = tvl.shares - (share_value as u128);
 
-            if (simple_map::contains_key(&inactive_map, addr)) {
-                let inactive_balance = simple_map::borrow_mut(&mut inactive_map, addr);
+            if (simple_map::contains_key(inactive_map, addr)) {
+                let inactive_balance = simple_map::borrow_mut(inactive_map, addr);
                 *inactive_balance = *inactive_balance + coin_value;
             }
             else {
-                simple_map::add(&mut inactive_map, *addr, coin_value);
+                simple_map::add(inactive_map, *addr, coin_value);
             };
 
             i = i + 1;
@@ -723,7 +735,6 @@ module openrails::shared_stake {
     fun add_to_iterable_map(iterable_map: &mut IterableMap, addr: address, amount: u64) {
         let map = &mut iterable_map.map;
 
-        // TO DO: make sure these balances are really being updated
         if (simple_map::contains_key(map, &addr)) {
             let balance = simple_map::borrow_mut(map, &addr);
             *balance = *balance + amount;
@@ -764,5 +775,66 @@ module openrails::shared_stake {
         assert!(shared_stake_pool.balances.active == active, EINCORRECT_BALANCE);
         assert!(shared_stake_pool.balances.pending_active == pending_active, EINCORRECT_BALANCE);
         assert!(shared_stake_pool.balances.pending_inactive_shares == pending_inactive_shares, EINCORRECT_BALANCE);
+    }
+
+    #[test_only]
+    public fun assert_tvl(pool_addr: address, shares: u128, coins: u128) acquires TotalValueLocked {
+        let tvl = borrow_global<TotalValueLocked>(pool_addr);
+        assert!(tvl.shares == shares, EINCORRECT_BALANCE);
+        assert!(tvl.coins == coins, EINCORRECT_BALANCE);
+    }
+
+    #[test_only]
+    public entry fun initialize_for_test(aptos_framework: &signer, validator: &signer) {
+        let validator_addr = signer::address_of(validator);
+        assert!(!exists<SharedStakePool>(validator_addr), error::invalid_argument(EALREADY_REGISTERED));
+
+        // stake::initialize_stake_owner(validator, 0, validator_addr, validator_addr);
+        stake::initialize_for_test(aptos_framework);
+        stake::initialize_test_validator(validator, 0, false, false);
+
+        let owner_cap = stake::extract_owner_cap(validator);
+
+        move_to(validator, SharedStakePool {
+            owner_cap,
+            pending_inactive_shares: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            inactive_coins: IterableMap {
+                map: simple_map::create<address, u64>(),
+                list: vector::empty<address>()
+            },
+            balances: Balances {
+                active: 0,
+                pending_active: 0,
+                pending_inactive_shares: 0,
+            },
+            share_to_unlock_next_epoch: 0,
+            operator_agreement: OperatorAgreement {
+                operator: validator_addr,
+                monthly_fee_usd: 0,
+                performance_fee_bps: 500,
+                last_paid_secs: 0,
+                epoch_effective: 0
+            },
+            pending_operator_agreement: option::none(),
+            validator_status: VALIDATOR_STATUS_INACTIVE,
+            performance_log: vector::empty<u128>()
+        });
+
+        move_to(validator, TotalValueLocked {
+            coins: 0,
+            shares: 0
+        });
+
+        move_to(validator, EpochTracker {
+            epoch: reconfiguration::current_epoch(),
+            locked_until_secs: stake::get_lockup_secs(validator_addr)
+        });
+
+        move_to(validator, GovernanceCapability {
+            pool_addr: validator_addr
+        });
     }
 }
