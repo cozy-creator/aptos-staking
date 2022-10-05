@@ -6,6 +6,7 @@ module openrails::shared_stake_tests {
     use aptos_framework::account;
     use aptos_framework::reconfiguration;
     use aptos_framework::aptos_coin::{Self, AptosCoin};
+    use aptos_std::debug;
 
     use openrails::shared_stake;
     use aptos_framework::timestamp;
@@ -58,6 +59,12 @@ module openrails::shared_stake_tests {
         stake::rotate_consensus_key(validator, signer::address_of(validator), CONSENSUS_KEY_2, CONSENSUS_POP_2);
     }
 
+    public fun new_epoch() {
+        stake::end_epoch();
+        reconfiguration::reconfigure_for_test_custom()
+        // reconfiguration::reconfigure_for_test();
+    }
+
     // ================= Tests =================
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -96,34 +103,37 @@ module openrails::shared_stake_tests {
         // We should be in the pending_active validator set
         assert!(!stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
 
-        // End the epoch, beginning a new one
-        stake::end_epoch();
+        // End the epoch 0, start epoch 1
+        new_epoch();
 
         // We should now be in the active validator set
         assert!(stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
         assert!(stake::get_remaining_lockup_secs(validator_addr) == LOCKUP_CYCLE_SECONDS, 1);
 
-        // End the epoch, and check the balances
-        stake::end_epoch();
+        // End the epoch 1, earn our first reward, start epoch 2, and check the balances
+        new_epoch();
         assert!(stake::get_validator_state(validator_addr) == VALIDATOR_STATUS_ACTIVE, 3);
         stake::assert_validator_state(validator_addr, 101, 0, 0, 0, 0);
-        // So these bottom two tests fail when "active" is set to 100 or 101
-        // stake::assert_stake_pool(validator_addr, 101, 0, 0, 0);
-        // shared_stake::assert_balances(validator_addr, 101, 0, 0);
+        stake::assert_stake_pool(validator_addr, 101, 0, 0, 0);
+        let (active, _, _, _) = stake::get_stake(validator_addr);
+        assert!(active == 101, 10);
+        // shared stake has to be cranked, or else its internal balance will be out of date
+        shared_stake::crank_on_new_epoch(validator_addr);
+        shared_stake::assert_balances(validator_addr, 101, 0, 0);
 
         // Deposit some coins. Now that the validator status is active, the coins will be deposited into pending active first
         shared_stake::deposit(user, validator_addr, 100);
         assert!(coin::balance<AptosCoin>(user_addr) == 300, EINCORRECT_BALANCE);
         stake::assert_validator_state(validator_addr, 101, 0, 100, 0, 0);
 
-        // Assert that the user now has shares equivalent to the total amount deposited
+        // Assert that the user now has coins from new deposit (100), old deposit (100) and interest (1)
+        shared_stake::assert_balances(validator_addr, 101, 100, 0);
         let user_stake = shared_stake::get_stake_balance(validator_addr, user_addr);
-        assert!(user_stake == 200, EINCORRECT_BALANCE);
+        assert!(user_stake == 201, EINCORRECT_BALANCE);
 
-        // End the epoch and verify that the balances are correct
-        stake::end_epoch();
+        // End the epoch 2, start epoch 3
+        new_epoch();
         stake::assert_validator_state(validator_addr, 202, 0, 0, 0, 0);
-        assert!(coin::balance<AptosCoin>(user_addr) == 300, EINCORRECT_BALANCE);
 
         // Now, let's deposit and unlock some coins in the same epoch
         shared_stake::deposit(user, validator_addr, 100);
@@ -134,19 +144,24 @@ module openrails::shared_stake_tests {
 
         shared_stake::unlock(user, validator_addr, 100);
         assert!(coin::balance<AptosCoin>(user_addr) == 200, EINCORRECT_BALANCE);
-        stake::assert_validator_state(validator_addr, 102, 0, 100, 100, 0);
+        debug::print(&9999);
+        stake::assert_validator_state(validator_addr, 102, 0, 100, 100, 0); // <--- ERROR HERE
         let user_stake = shared_stake::get_stake_balance(validator_addr, user_addr);
-        assert!(user_stake == 200, EINCORRECT_BALANCE);
+        assert!(user_stake == 202, EINCORRECT_BALANCE);
 
-        // End the epoch and check the balances
-        stake::end_epoch();
+        // End epoch 3, start epoch 4
+        new_epoch();
         stake::assert_validator_state(validator_addr, 203, 0, 0, 101, 0);
 
         // Once unlocked, and coins are in pending_inactive, coins will accrue there instead of active
 
         // Flashforward to the lockup cycle ending, and check the balances again
         timestamp::fast_forward_seconds(LOCKUP_CYCLE_SECONDS);
-        stake::end_epoch();
+
+        debug::print(&7777);
+
+        // End epoch 4, start epoch 5
+        new_epoch();
         stake::assert_validator_state(validator_addr, 205, 102, 0, 0, 0);
 
         // Now that the stake is in inactive, it should be able to be withdrawn

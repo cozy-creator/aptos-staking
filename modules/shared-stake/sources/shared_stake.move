@@ -13,6 +13,7 @@ module openrails::shared_stake {
     use aptos_framework::stake;
     use aptos_framework::reconfiguration;
     use aptos_framework::timestamp;
+    use aptos_std::debug;
 
     const MAX_VECTOR: u64 = 65536;
     // Seconds per month, assuming 1 month = 30 days
@@ -203,11 +204,10 @@ module openrails::shared_stake {
 
         let tvl = borrow_global<TotalValueLocked>(this);
         let coin_value = share_to_apt(tvl, share_value);
-        let (active, _, _, _) = stake::get_stake(this);
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
 
         // this stake_pool doesn't have enough active balance to unlock; queue the unlock
-        if (active < coin_value) {
+        if (stake_pool.balances.active < coin_value) {
             stake_pool.share_to_unlock_next_epoch = stake_pool.share_to_unlock_next_epoch + share_value;
         } else {
             stake::unlock_with_cap(coin_value, &stake_pool.owner_cap);
@@ -317,23 +317,23 @@ module openrails::shared_stake {
 
     // ============== Helper functions ==============
 
-    public fun share_to_apt(tvl: &TotalValueLocked, amount: u64): u64 {
-        (((amount as u128) / share_apt_ratio(tvl)) as u64)
-    }
-
-    public fun apt_to_share(tvl: &TotalValueLocked, amount: u64): u64 {
-        (((amount as u128) * share_apt_ratio(tvl)) as u64)
-    }
-
-    // We assume that crank_on_new_epoch has been called, otherwise this will
+    // We assume that crank_on_new_epoch has been called to update tvl, otherwise this will
     // understimate the number of coins we have, and give an inferior price
     // This is not a security risk, but if slashing is ever introduced, this should be changed
     // to check the crank, as it might be possible we have fewer coins than expected
-    public fun share_apt_ratio(tvl: &TotalValueLocked): u128 {
-        if (tvl.coins == 0 || tvl.shares == 0) {
-            1
+    public fun share_to_apt(tvl: &TotalValueLocked, amount: u64): u64 {
+        if (tvl.shares == 0 || tvl.coins == 0) {
+            amount
         } else {
-            ((tvl.shares as u128) / (tvl.coins as u128))
+            (((amount as u128) * tvl.shares / tvl.coins) as u64)
+        }
+    }
+
+    public fun apt_to_share(tvl: &TotalValueLocked, amount: u64): u64 {
+        if (tvl.shares == 0 || tvl.coins == 0) {
+            amount
+        } else {
+            (((amount as u128) * tvl.coins / tvl.shares) as u64)
         }
     }
 
@@ -443,6 +443,10 @@ module openrails::shared_stake {
         let current_epoch = reconfiguration::current_epoch();
         let epoch_tracker = borrow_global_mut<EpochTracker>(this);
 
+        debug::print(&b"whatever");
+        debug::print(&epoch_tracker.epoch);
+        debug::print(&current_epoch);
+
         // Ensures crank can only run once per epoch
         if (current_epoch <= epoch_tracker.epoch) return;
         epoch_tracker.epoch = current_epoch;
@@ -481,11 +485,14 @@ module openrails::shared_stake {
             0
         };
 
-        let performance = (rewards_amount as u128) / (stake_before_rewards as u128);
-        vector::push_back(&mut stake_pool.performance_log, performance);
-        // only stores the last 10 epochs
-        if (vector::length(&stake_pool.performance_log) > 10) {
-            vector::remove(&mut stake_pool.performance_log, 0);
+        if (stake_before_rewards > 0) {
+            let performance = (rewards_amount as u128) / (stake_before_rewards as u128);
+            vector::push_back(&mut stake_pool.performance_log, performance);
+
+            // only stores the last 10 epochs
+            if (vector::length(&stake_pool.performance_log) > 10) {
+                vector::remove(&mut stake_pool.performance_log, 0);
+            };
         };
 
         // Update our coins balance to account for rewards
@@ -520,6 +527,7 @@ module openrails::shared_stake {
         // update our cached values
         let (active, _, pending_active, _) = stake::get_stake(this);
         stake_pool.balances.active = active;
+        // pending_active should always be 0, because it is added to active every epoch
         stake_pool.balances.pending_active = pending_active;
         stake_pool.operator_agreement.last_paid_secs = reconfiguration::last_reconfiguration_time() / MICRO_CONVERSION_FACTOR;
         stake_pool.validator_status = stake::get_validator_state(this);
