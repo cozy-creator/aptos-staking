@@ -224,6 +224,22 @@ module openrails::shared_stake_tests {
         assert_expected_balances(user1_addr, validator_addr, 9000000, 1650000, 0, 0, 0, 1500000, 0,1100000);
         assert_expected_balances(user2_addr, validator_addr, 9500000, 1650000, 0, 0, 0, 1500000, 0,550000);
 
+        // Unlock some stake in both accounts
+        // Unlock 200,000 in user1
+        // Unlock 300,000 in user2
+        shared_stake::unlock(user1, validator_addr, 200000);
+        assert_expected_balances(user1_addr, validator_addr, 9000000, 1450001, 0, 0, 199999, 1500000, 181818,900000);
+
+        shared_stake::unlock(user2, validator_addr, 300000);
+        assert_expected_balances(user2_addr, validator_addr, 9500000, 1150002, 0, 0, 499998, 1500000, 454545, 250000);
+
+        // // For testing purposes
+        // let (test_active_stake, test_pending_active_stake, test_pending_inactive_shares, _test_shares, _test_staked_coins) = shared_stake::get_balances(validator_addr);
+        // let staked_balance = shared_stake::get_stake_balance(validator_addr, user2_addr);
+        // debug::print(&test_active_stake);
+        // debug::print(&test_pending_active_stake);
+        // debug::print(&test_pending_inactive_shares);
+        // debug::print(&staked_balance);
     }
 
     // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]

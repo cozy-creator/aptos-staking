@@ -837,4 +837,21 @@ module openrails::shared_stake {
             pool_addr: validator_addr
         });
     }
+
+    #[test_only]
+    public fun get_balances(pool_addr: address): (u64, u64, u64, u64, u64)
+    acquires SharedStakePool, TotalValueLocked {
+        let shared_stake_pool = borrow_global<SharedStakePool>(pool_addr);
+        let tvl = borrow_global<TotalValueLocked>(pool_addr);
+
+
+        (
+            shared_stake_pool.balances.active,
+            shared_stake_pool.balances.pending_active,
+            shared_stake_pool.balances.pending_inactive_shares,
+            (tvl.shares as u64),
+            (tvl.coins as u64),
+        )
+
+    }
 }
