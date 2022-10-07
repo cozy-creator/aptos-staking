@@ -6,7 +6,7 @@ module openrails::shared_stake_tests {
     use aptos_framework::account;
     use aptos_framework::reconfiguration;
     use aptos_framework::aptos_coin::{Self, AptosCoin};
-    use aptos_std::debug;
+    // use aptos_std::debug;
 
     use openrails::shared_stake;
     use aptos_framework::timestamp;
@@ -149,8 +149,6 @@ module openrails::shared_stake_tests {
         // Coin increases by 100, shares increases by 98. User balance increases by 100
         assert_expected_balances(user_addr, validator_addr, 250, 53, 0, 100, 99, 247, 98, 152);
 
-        debug::print(&2222222222);
-
         // ===== End epoch 3, start epoch 4
         new_epoch();
         shared_stake::crank_on_new_epoch(validator_addr);
@@ -158,8 +156,6 @@ module openrails::shared_stake_tests {
         // No reward received, pending_active moves to active
         // No reward was received because the reward rate is 1%, thus there must be a minimum of 100 in a balance for rewards to accrue
         assert_expected_balances(user_addr, validator_addr, 250, 153, 0, 0, 99, 247, 98, 152);
-
-        debug::print(&77777777777);
 
         // Fast-forward to our lockup cycle ending
         timestamp::fast_forward_seconds(LOCKUP_CYCLE_SECONDS);
@@ -233,207 +229,192 @@ module openrails::shared_stake_tests {
         shared_stake::unlock(user2, validator_addr, 300000);
         assert_expected_balances(user2_addr, validator_addr, 9500000, 1150002, 0, 0, 499998, 1500000, 454545, 250000);
 
-        // // For testing purposes
-        // let (test_active_stake, test_pending_active_stake, test_pending_inactive_shares, _test_shares, _test_staked_coins) = shared_stake::get_balances(validator_addr);
-        // let staked_balance = shared_stake::get_stake_balance(validator_addr, user2_addr);
-        // debug::print(&test_active_stake);
-        // debug::print(&test_pending_active_stake);
-        // debug::print(&test_pending_inactive_shares);
-        // debug::print(&staked_balance);
+        // Cancel 100,000 of user2's stake since the unlock period isn't over
+        shared_stake::cancel_unlock(user2, validator_addr, 100000);
+        assert_expected_balances(user2_addr, validator_addr, 9500000, 1250002, 0, 0, 399998, 1500000, 363636, 350000);
+
+        // ===== End epoch 2, start epoch 3
+        // Fast-forward to our lockup cycle ending, we'll be able to unlock coins this epoch
+        timestamp::fast_forward_seconds(LOCKUP_CYCLE_SECONDS);
+        new_epoch();
+        shared_stake::crank_on_new_epoch(validator_addr);
+
+        // The stake pool has accrued another 10%.
+        // Balances accrue in their own pools separately, with stake in pending inactive being moved to inactive since the lockup ended
+        assert_expected_balances(user1_addr, validator_addr, 9000000, 1375002, 439997, 0, 0, 1136364, 0, 990001);
+        assert_expected_balances(user2_addr, validator_addr, 9500000, 1375002, 439997, 0, 0, 1136364, 0, 385000);
+
+        // Withdraw some stake from user1
+        shared_stake::withdraw(user1, validator_addr, 5000);
+        assert_expected_balances(user1_addr, validator_addr, 9005000, 1375002, 434997, 0, 0, 1136364, 0, 990001);
+
+        // Withdraw some stake from user2
+        shared_stake::withdraw(user2, validator_addr, 50000);
+        assert_expected_balances(user2_addr, validator_addr, 9550000, 1375002, 384997, 0, 0, 1136364, 0, 385000);
+
     }
 
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // public entry fun test_spam_crank(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 100);
-    //     stake::join_validator_set(validator, validator_addr);
-    //
-    //     // Call the function 1,000 times in a single epoch
-    //     // Calling it 1,000,000 causes the test to fail via timeout, but that's ok
-    //     let i = 0;
-    //     while (i < 1000) {
-    //         shared_stake::crank_on_new_epoch(validator_addr);
-    //         i = i + 1;
-    //     }
-    // }
-    //
-    // // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // // public entry fun test_cancel_unlock(aptos_framework: &signer, validator: &signer, user: &signer) {
-    // //     let validator_addr = signer::address_of(validator);
-    // //     let user_addr = signer::address_of(user);
-    // //
-    // //     intialize_test_state(aptos_framework, validator, user);
-    // //
-    // //     // Mint some coins to the user
-    // //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    // //
-    // //     // Deposit coins
-    // //     shared_stake::deposit(user, validator_addr, 100);
-    // //     assert_expected_balances(user_addr, validator_addr, 400, 100, 0, 0, 0, 100, 0, 100);
-    // //
-    // //     // Minimum stake met, join validator set
-    // //     stake::join_validator_set(validator, validator_addr);
-    // //
-    // //     // We should be in the pending_active validator set
-    // //     assert!(!stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
-    // //
-    // //     // ===== End the epoch 0, start epoch 1
-    // //     new_epoch();
-    // //
-    // //     // We should now be in the active validator set
-    // //     assert!(stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
-    // //     assert!(stake::get_remaining_lockup_secs(validator_addr) == LOCKUP_CYCLE_SECONDS, 1);
-    // //
-    // //     // Balances are unchanged
-    // //     assert_expected_balances(user_addr, validator_addr, 400, 100, 0, 0, 0, 100, 0, 100);
-    // //
-    // //     // ===== End epoch 1, earn our first reward, start epoch 2
-    // //     // If we do not call a shared_stake command, we must crank, otherwise shared_stake
-    // //     // balances will be outdated. (Crank updates balances.)
-    // //     new_epoch();
-    // //     shared_stake::crank_on_new_epoch(validator_addr);
-    // //
-    // //     // active increases by 1 from staking reward
-    // //     assert_expected_balances(user_addr, validator_addr, 400, 101, 0, 0, 0, 100, 0, 101);
-    // //
-    // //     // Unlock some coins
-    // // }
-    //
-    // // ================= Expected Failure Tests =================
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_withdraw_before_unlock(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 100);
-    //     stake::join_validator_set(validator, validator_addr);
-    //
-    //     new_epoch();
-    //
-    //     shared_stake::withdraw(user, validator_addr, 50);
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_unlock_more_than_deposited(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 100);
-    //     stake::join_validator_set(validator, validator_addr);
-    //
-    //     new_epoch();
-    //
-    //     shared_stake::unlock(user, validator_addr, 101);
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_unlock_more_than_deposited_same_epoch(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 100);
-    //     stake::join_validator_set(validator, validator_addr);
-    //
-    //     shared_stake::unlock(user, validator_addr, 101);
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_withdraw_more_than_unlocked(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 100);
-    //     stake::join_validator_set(validator, validator_addr);
-    //
-    //     new_epoch();
-    //
-    //     shared_stake::unlock(user, validator_addr, 50);
-    //
-    //     new_epoch();
-    //
-    //     shared_stake::withdraw(user, validator_addr, 51)
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_withdraw_more_than_unlocked_same_epoch(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 100);
-    //     stake::join_validator_set(validator, validator_addr);
-    //
-    //     shared_stake::unlock(user, validator_addr, 50);
-    //
-    //     shared_stake::withdraw(user, validator_addr, 51);
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_deposit_more_than_balance(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 500);
-    //     shared_stake::deposit(user, validator_addr, 501);
-    //     stake::join_validator_set(validator, validator_addr);
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_join_validator_set_less_than_min_stake(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 99);
-    //     shared_stake::deposit(user, validator_addr, 99);
-    //     stake::join_validator_set(validator, validator_addr);
-    // }
-    //
-    // #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
-    // #[expected_failure]
-    // public entry fun test_join_validator_set_more_than_max_stake(aptos_framework: &signer, validator: &signer, user: &signer) {
-    //     let validator_addr = signer::address_of(validator);
-    //     let user_addr = signer::address_of(user);
-    //
-    //     intialize_test_state(aptos_framework, validator, user);
-    //
-    //     aptos_coin::mint(aptos_framework, user_addr, 10001);
-    //     shared_stake::deposit(user, validator_addr, 10001);
-    //     stake::join_validator_set(validator, validator_addr);
-    // }
-    //
-    // // We should test extracting and depositing shares
-    //     // let share = shared_stake::extract_share(user, validator_addr, user_stake);
-    //     // let share_value_in_apt = shared_stake::get_stake_balance_of_share(&share);
-    //     // assert!(share_value_in_apt == user_stake, EINCORRECT_BALANCE);
-    //     // shared_stake::store_share(user_addr, share);
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    public entry fun test_spam_crank(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 100);
+        stake::join_validator_set(validator, validator_addr);
+
+        // Call the function 1,000 times in a single epoch
+        // Calling it 1,000,000 causes the test to fail via timeout, but that's ok
+        let i = 0;
+        while (i < 1000) {
+            shared_stake::crank_on_new_epoch(validator_addr);
+            i = i + 1;
+        }
+    }
+
+    // ================= Expected Failure Tests =================
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_withdraw_before_unlock(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 100);
+        stake::join_validator_set(validator, validator_addr);
+
+        new_epoch();
+
+        shared_stake::withdraw(user, validator_addr, 50);
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_unlock_more_than_deposited(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 100);
+        stake::join_validator_set(validator, validator_addr);
+
+        new_epoch();
+
+        shared_stake::unlock(user, validator_addr, 101);
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_unlock_more_than_deposited_same_epoch(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 100);
+        stake::join_validator_set(validator, validator_addr);
+
+        shared_stake::unlock(user, validator_addr, 101);
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_withdraw_more_than_unlocked(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 100);
+        stake::join_validator_set(validator, validator_addr);
+
+        new_epoch();
+
+        shared_stake::unlock(user, validator_addr, 50);
+
+        new_epoch();
+
+        shared_stake::withdraw(user, validator_addr, 51)
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_withdraw_more_than_unlocked_same_epoch(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 100);
+        stake::join_validator_set(validator, validator_addr);
+
+        shared_stake::unlock(user, validator_addr, 50);
+
+        shared_stake::withdraw(user, validator_addr, 51);
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_deposit_more_than_balance(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 500);
+        shared_stake::deposit(user, validator_addr, 501);
+        stake::join_validator_set(validator, validator_addr);
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_join_validator_set_less_than_min_stake(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 99);
+        shared_stake::deposit(user, validator_addr, 99);
+        stake::join_validator_set(validator, validator_addr);
+    }
+
+    #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
+    #[expected_failure]
+    public entry fun test_join_validator_set_more_than_max_stake(aptos_framework: &signer, validator: &signer, user: &signer) {
+        let validator_addr = signer::address_of(validator);
+        let user_addr = signer::address_of(user);
+
+        intialize_test_state(aptos_framework, validator, user);
+
+        aptos_coin::mint(aptos_framework, user_addr, 10001);
+        shared_stake::deposit(user, validator_addr, 10001);
+        stake::join_validator_set(validator, validator_addr);
+    }
+
+
+    // // For testing purposes
+    // let (_test_active_stake, _test_pending_active_stake, test_pending_inactive_shares, shares, user_staked_coins) = shared_stake::get_balances(validator_addr);
+    // let staked_balance = shared_stake::get_stake_balance(validator_addr, user2_addr);
+    // let (active, inactive, pending_active, pending_inactive) = stake::get_stake(validator_addr);
+    // let user_coin_balance = coin::balance<AptosCoin>(user2_addr);
+    // debug::print(&active);
+    // debug::print(&inactive);
+    // debug::print(&pending_active);
+    // debug::print(&pending_inactive);
+    // debug::print(&test_pending_inactive_shares);
+    // debug::print(&staked_balance);
+    // debug::print(&shares);
+    // debug::print(&user_staked_coins);
+    // debug::print(&user_coin_balance);
+
 }

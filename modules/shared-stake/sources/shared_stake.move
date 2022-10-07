@@ -844,7 +844,6 @@ module openrails::shared_stake {
         let shared_stake_pool = borrow_global<SharedStakePool>(pool_addr);
         let tvl = borrow_global<TotalValueLocked>(pool_addr);
 
-
         (
             shared_stake_pool.balances.active,
             shared_stake_pool.balances.pending_active,
