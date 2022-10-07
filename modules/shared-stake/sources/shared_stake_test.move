@@ -290,6 +290,8 @@ module openrails::shared_stake_tests {
         new_epoch();
 
         shared_stake::withdraw(user, validator_addr, 50);
+
+        stake::assert_validator_state(validator_addr, 100, 0, 0, 0, 0);
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -307,6 +309,8 @@ module openrails::shared_stake_tests {
         new_epoch();
 
         shared_stake::unlock(user, validator_addr, 101);
+
+        stake::assert_validator_state(validator_addr, 100, 0, 0, 0, 0);
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -322,6 +326,8 @@ module openrails::shared_stake_tests {
         stake::join_validator_set(validator, validator_addr);
 
         shared_stake::unlock(user, validator_addr, 101);
+
+        stake::assert_validator_state(validator_addr, 100, 0, 0, 0, 0);
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -342,7 +348,9 @@ module openrails::shared_stake_tests {
 
         new_epoch();
 
-        shared_stake::withdraw(user, validator_addr, 51)
+        shared_stake::withdraw(user, validator_addr, 51);
+
+        assert!(coin::balance<AptosCoin>(user_addr) == 400, EINCORRECT_BALANCE)
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -360,6 +368,8 @@ module openrails::shared_stake_tests {
         shared_stake::unlock(user, validator_addr, 50);
 
         shared_stake::withdraw(user, validator_addr, 51);
+
+        assert!(coin::balance<AptosCoin>(user_addr) == 400, EINCORRECT_BALANCE);
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -373,6 +383,7 @@ module openrails::shared_stake_tests {
         aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 501);
         stake::join_validator_set(validator, validator_addr);
+        assert!(!stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -386,6 +397,7 @@ module openrails::shared_stake_tests {
         aptos_coin::mint(aptos_framework, user_addr, 99);
         shared_stake::deposit(user, validator_addr, 99);
         stake::join_validator_set(validator, validator_addr);
+        assert!(!stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
     }
 
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
@@ -399,6 +411,7 @@ module openrails::shared_stake_tests {
         aptos_coin::mint(aptos_framework, user_addr, 10001);
         shared_stake::deposit(user, validator_addr, 10001);
         stake::join_validator_set(validator, validator_addr);
+        assert!(!stake::is_current_epoch_validator(validator_addr), EINCORRECT_VALIDATOR_STATE);
     }
 
 

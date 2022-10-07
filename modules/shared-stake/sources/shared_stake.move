@@ -329,7 +329,7 @@ module openrails::shared_stake {
     //
     // We assume that crank_on_new_epoch has been called to update tvl, otherwise this will
     // understimate the number of coins we have, and give an inferior price
-    // 
+    //
     // This does not allow theft of funds, but if slashing is ever introduced,
     // this should be changed to check the crank, as it might be possible we have fewer
     // coins than expected
