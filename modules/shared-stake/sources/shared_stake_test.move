@@ -26,54 +26,51 @@ module openrails::shared_stake_tests {
 
     // ================= Test-only helper functions =================
 
-    // The reward rate is 1%
-    public fun intialize_test_state(aptos_framework: &signer, validator: &signer, user: &signer) {
+    // Minimum stake is 100, Max stake is 10,000,000
+    public fun initialize_test_state(aptos_framework: &signer, validator: &signer, reward_numerator: u64, reward_denominator: u64) {
         account::create_account_for_test(signer::address_of(aptos_framework));
         account::create_account_for_test(signer::address_of(validator));
-        account::create_account_for_test(signer::address_of(user));
+        
         reconfiguration::initialize_for_test(aptos_framework);
-        reconfiguration::reconfigure_for_test();
-        coin::register<AptosCoin>(validator);
-        coin::register<AptosCoin>(user);
-        // stake::initialize_for_test_custom(aptos_framework, 100, 10000, 3600, true, 1, 100, 100);
-        // stake::initialize_test_validator(validator, 0, false, false);
 
-        // Call the initialize function, rotate consensus keys
-        shared_stake::initialize_for_test(aptos_framework, validator);
+        coin::register<AptosCoin>(validator);
+
+        // min stake, max stake, lockup duration secs, allow validator set change
+        // reward rate numerator, reward rate denominator, voting power increase limit
+        stake::initialize_for_test_custom(aptos_framework, 100, 10000000, 3600, true, reward_numerator, reward_denominator, 10000);
+
+        shared_stake::initialize(validator);
+        
+        // ValidatorConfig is created when stake::initialize_stake_owner is called
+        // However, the consensus_pubkey, network_addresses, and fullnode_addresses
+        // are empty when this happens. In order to join the validator set, we need
+        // at minimum a valid consensus_pubkey, which we add here. For some reason
+        // stake::join_validator_set never checks for the other two addresses.
         stake::rotate_consensus_key(validator, signer::address_of(validator), CONSENSUS_KEY_2, CONSENSUS_POP_2);
     }
 
-    // The reward rate is 10%
-    // Max stake is 10,000,000
-    public fun intialize_test_state_two_users(aptos_framework: &signer, validator: &signer, user1: &signer, user2: &signer) {
-        account::create_account_for_test(signer::address_of(aptos_framework));
-        account::create_account_for_test(signer::address_of(validator));
-        account::create_account_for_test(signer::address_of(user1));
-        account::create_account_for_test(signer::address_of(user2));
-        reconfiguration::initialize_for_test(aptos_framework);
-        reconfiguration::reconfigure_for_test();
-        coin::register<AptosCoin>(validator);
-        coin::register<AptosCoin>(user1);
-        coin::register<AptosCoin>(user2);
-        stake::initialize_for_test_custom(aptos_framework, 100, 10000000, 3600, true, 1, 10, 100);
-
-        // Call the initialize function, rotate consensus keys
-        shared_stake::initialize(validator);
-        stake::rotate_consensus_key(validator, signer::address_of(validator), CONSENSUS_KEY_2, CONSENSUS_POP_2);
+    public fun initialize_user(aptos_framework: &signer, user: &signer, initial_coin: u64) {
+        let addr = signer::address_of(user);
+        account::create_account_for_test(addr);
+        coin::register<AptosCoin>(user);
+        aptos_coin::mint(aptos_framework, addr, initial_coin);
     }
 
     public fun new_epoch() {
         stake::end_epoch();
+        // increments reconfiguration::Configuration.epoch
         reconfiguration::reconfigure_for_test_custom();
-        // shared_stake::crank_on_new_epoch(validator_addr);
-        // reconfiguration::reconfigure_for_test();
     }
 
     public fun assert_expected_balances(user_addr: address, validator_addr: address, user_coin_balance: u64, active_stake: u64, inactive_stake: u64, pending_active_stake: u64, pending_inactive_stake: u64, total_shares: u64, pending_inactive_shares: u64, user_staked_coin: u64) {
         assert!(coin::balance<AptosCoin>(user_addr) == user_coin_balance, EINCORRECT_BALANCE);
+
         stake::assert_stake_pool(validator_addr, active_stake, inactive_stake, pending_active_stake, pending_inactive_stake);
+
         shared_stake::assert_balances(validator_addr, active_stake, pending_active_stake, pending_inactive_shares);
+
         shared_stake::assert_tvl(validator_addr, (total_shares as u128), ((active_stake + pending_active_stake + pending_inactive_stake) as u128));
+
         let staked_balance = shared_stake::get_stake_balance(validator_addr, user_addr);
         assert!(staked_balance == user_staked_coin, EINCORRECT_BALANCE);
     }
@@ -85,10 +82,9 @@ module openrails::shared_stake_tests {
         let validator_addr = signer::address_of(validator);
         let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
-
-        // Mint some coins to the user
-        aptos_coin::mint(aptos_framework, user_addr, 500);
+        // reward rate is 1% per epoch, or 1 / 100
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
         // Deposit coin, which stakes the tokens with the validator address
         // Because the validator is currently not part of the validator set, any deposited stake
@@ -154,7 +150,7 @@ module openrails::shared_stake_tests {
         shared_stake::crank_on_new_epoch(validator_addr);
 
         // No reward received, pending_active moves to active
-        // No reward was received because the reward rate is 1%, thus there must be a minimum of 100 in a balance for rewards to accrue
+        // No reward was received because the reward rate is 1%, thus there must be a minimum of 100 in a balance for rewards to accrue due to a rounding error
         assert_expected_balances(user_addr, validator_addr, 250, 153, 0, 0, 99, 247, 98, 152);
 
         // Fast-forward to our lockup cycle ending
@@ -169,7 +165,7 @@ module openrails::shared_stake_tests {
         // user balance is corrected to 154
         assert_expected_balances(user_addr, validator_addr, 250, 154, 99, 0, 0, 149, 0, 154);
 
-        // // Now that the stake is in inactive, it should be able to be withdrawn
+        // Withdraw inactive stake
         shared_stake::withdraw(user, validator_addr, 99);
 
         assert_expected_balances(user_addr, validator_addr, 349, 154, 0, 0, 0, 149, 0, 154);
@@ -182,10 +178,10 @@ module openrails::shared_stake_tests {
         let user1_addr = signer::address_of(user1);
         let user2_addr = signer::address_of(user2);
 
-        intialize_test_state_two_users(aptos_framework, validator, user1, user2);
-
-        aptos_coin::mint(aptos_framework, user1_addr, 10000000);
-        aptos_coin::mint(aptos_framework, user2_addr, 10000000);
+        // reward rate is 10% per epoch, 1 / 10
+        initialize_test_state(aptos_framework, validator, 1, 10);
+        initialize_user(aptos_framework, user1, 10000000);
+        initialize_user(aptos_framework, user2, 10000000);
 
         shared_stake::deposit(user1, validator_addr, 1000000);
         assert_expected_balances(user1_addr, validator_addr, 9000000, 1000000, 0, 0, 0, 1000000, 0,1000000);
@@ -257,10 +253,10 @@ module openrails::shared_stake_tests {
     #[test(aptos_framework = @0x1, validator = @0x123, user = @0x456)]
     public entry fun test_spam_crank(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
-        aptos_coin::mint(aptos_framework, user_addr, 500);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
+
         shared_stake::deposit(user, validator_addr, 100);
         stake::join_validator_set(validator, validator_addr);
 
@@ -279,11 +275,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_withdraw_before_unlock(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 100);
         stake::join_validator_set(validator, validator_addr);
 
@@ -296,11 +291,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_unlock_more_than_deposited(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 100);
         stake::join_validator_set(validator, validator_addr);
 
@@ -313,11 +307,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_unlock_more_than_deposited_same_epoch(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 100);
         stake::join_validator_set(validator, validator_addr);
 
@@ -328,11 +321,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_withdraw_more_than_unlocked(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 100);
         stake::join_validator_set(validator, validator_addr);
 
@@ -349,11 +341,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_withdraw_more_than_unlocked_same_epoch(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 100);
         stake::join_validator_set(validator, validator_addr);
 
@@ -366,11 +357,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_deposit_more_than_balance(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 500);
         shared_stake::deposit(user, validator_addr, 501);
         stake::join_validator_set(validator, validator_addr);
     }
@@ -379,11 +369,10 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_join_validator_set_less_than_min_stake(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 500);
 
-        aptos_coin::mint(aptos_framework, user_addr, 99);
         shared_stake::deposit(user, validator_addr, 99);
         stake::join_validator_set(validator, validator_addr);
     }
@@ -392,12 +381,11 @@ module openrails::shared_stake_tests {
     #[expected_failure]
     public entry fun test_join_validator_set_more_than_max_stake(aptos_framework: &signer, validator: &signer, user: &signer) {
         let validator_addr = signer::address_of(validator);
-        let user_addr = signer::address_of(user);
 
-        intialize_test_state(aptos_framework, validator, user);
+        initialize_test_state(aptos_framework, validator, 1, 100);
+        initialize_user(aptos_framework, user, 10000001);
 
-        aptos_coin::mint(aptos_framework, user_addr, 10001);
-        shared_stake::deposit(user, validator_addr, 10001);
+        shared_stake::deposit(user, validator_addr, 10000001);
         stake::join_validator_set(validator, validator_addr);
     }
 
