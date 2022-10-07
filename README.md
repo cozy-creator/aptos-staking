@@ -81,11 +81,13 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 - run `aptos move compile --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c` or whatever your authentication key was that was generated above
 - similarly, you can do `aptos move publish --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c`
 
-### How to use
+### CLI Commands
 
-- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::initialize --max-gas 1000`
+- Only to be called by the stake pool: `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::initialize --max-gas 1000`
 - `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::deposit --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200 --max-gas 1000`
--
+- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::unlock --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200 --max-gas 1000`
+- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::cancel_unlock --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200 --max-gas 1000`
+- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::withdraw --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200 --max-gas 1000`
 
 ### Gas Cost Benchmarks
 
