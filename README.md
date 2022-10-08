@@ -1,4 +1,4 @@
-![Stake Router](./static/stake_router_octopie_small.png 'Stake Router')
+![Stake Router](./static/stake_router_octopie_small2.png 'Stake Router')
 
 ## Shared Stake Pool by OpenRails
 
@@ -52,7 +52,9 @@ Fill in $AMOUNT with the number of APT coins you want to deposit. Note that for 
 
 ### What This is
 
-This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make compsability easier.
+This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make composability easier. This is built for staking protocols (liquid staking, derivative stake tokens) to be built on top of.
+
+It's best if this module is eventually merged into the aptos-core, and replaces the stake module.
 
 ### Why We Made This:
 
