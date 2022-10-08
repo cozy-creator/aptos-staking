@@ -8,7 +8,7 @@ This module is just an initial rough draft; do not use this in mainnet or with a
 
 ### What This is
 
-This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make compsability easier.
+This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make composability easier. Stake-router (derivative staking, liquid staking) can be built on top of this.
 
 ### Why We Made This:
 
