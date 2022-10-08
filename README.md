@@ -38,17 +38,17 @@ Note that if these transactions are failing by running out of gas, try increasin
 
 Fill in $AMOUNT with the number of APT coins you want to deposit. Note that for all commands here and below, APT has 8 decimals of precision, so 10000000 = 1 APT, 100000 = 0.001 APT, etc.
 
-- **Unlock:** -
+- **Unlock:** schedules a balance to unlock. Unlocking takes some time, dependent upon a lot of on-chain parameters.
 
 `aptos move run --function-id $OPENRAILS::shared_stake::unlock --args address:$STAKEPOOL u64:$AMOUNT`
 
-- **Cancel Unlock:** -
+- **Cancel Unlock:** cancels an unlocking balance.
 
-- `aptos move run --function-id $OPENRAILS::shared_stake::cancel_unlock --args address:$STAKEPOOL u64:$AMOUNT`
+`aptos move run --function-id $OPENRAILS::shared_stake::cancel_unlock --args address:$STAKEPOOL u64:$AMOUNT`
 
-- **Withdraw:** -
+- **Withdraw:** withdraws coin from the shared stake pool after it's finished unlocking. In aptos_framework::stake, coins will move from pending_inactive (unlocking) to inactive balance, at which point it can be withdrawn.
 
-- `aptos move run --function-id $OPENRAILS::shared_stake::withdraw --args address:$STAKEPOOL u64:$AMOUNT`
+`aptos move run --function-id $OPENRAILS::shared_stake::withdraw --args address:$STAKEPOOL u64:$AMOUNT`
 
 ### What This is
 
@@ -119,13 +119,13 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 
 - On Aptos, epochs are measured in seconds, not blocks produced.
 
-### How to publish
+### How to publish this module
 
-- Go into the module you want to use (i.e., modules/shared-stake-pools)
-- run `aptos init`. This will generate a new random keypair for you and fund it with tokens initially. You may need to request additional tokens from the faucet for publishing large modules
-- run `aptos account list` and find your authentication key
-- run `aptos move compile --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c` or whatever your authentication key was that was generated above
-- similarly, you can do `aptos move publish --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c`
+- Go into the module you want to use (i.e., modules/shared-stake)
+- run `aptos init`. This will generate a new random keypair for you and fund it with tokens initially. You may need to request additional tokens from a faucet if you need them.
+- run `aptos account list` and find your account address
+- run `aptos move compile --named-addresses openrails=$YOUR_ADDRESS` or whatever your account address is was that was generated above
+- similarly, you can do `aptos move publish --named-addresses openrails=$YOUR_ADDRESS`
 
 ### Gas Cost Benchmarks
 
