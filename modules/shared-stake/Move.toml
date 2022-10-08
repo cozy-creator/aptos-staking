@@ -6,7 +6,7 @@ version = '0.2.0'
 std = "0x1"
 aptos_std = "0x1"
 aptos_framework = "0x1"
-openrails = '0x39ce2ae8d65ceb28cd8688ea78dafdf2177fd7a574e535035ad2f2feacb9998d'
+openrails = '_'
 
 [dependencies.AptosFramework]
 git = 'https://github.com/aptos-labs/aptos-core'

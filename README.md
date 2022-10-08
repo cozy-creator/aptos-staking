@@ -6,6 +6,50 @@
 
 This module is just an initial rough draft; do not use this in mainnet or with any real monetary value until after it's passed a full security audit.
 
+### How to Use This
+
+We only have CLI commands available at the moment. Please install the Aptos CLI and then use the following commands. First you'll need to specify the address where our module is deployed at:
+
+Devnet address: 0x653edb913f80cc763a29fb63b5418659f830e1dd966ea9c2ebefbdd684b40bee
+Testnet address: (coming soon)
+Mainnet address: (coming soon)
+
+`export OPENRAILS=<address>`
+
+This will create the constant OPENRAILS that resolves to one of the above addresses. Next up, we'll do the same for your address:
+
+`export STAKEPOOL=<address>`
+
+This will be the address where your stake pool is initialize at (if you initialize it, it'll be at your own address).
+
+Now use one of the following commands:
+
+- **Initialize:** this will create the openrails::shared_stake::Shared_Stake::SharedStakePool and aptos_framework::stake::StakePool resources at your address. We can only call this once per address; stake pools cannot be overwritten and you can only have one.
+
+`aptos move run --function-id $OPENRAILS::shared_stake::initialize`
+
+The shared stake pool will take possession of the stake_pool's owner_cap; this means that even though the stake pool is at your address, you won't be able to remove yours or anyone's funds from the stake pool, except by going through the shared_stake's interface functions. Your address will be set as the operator by default; this can be changed through the shared stake pool's governance (more on this below). Aside from being able to take over the governance cap and being the initial operator, your account has no special privileges over the shared stake pool.
+
+Note that if these transactions are failing by running out of gas, try increasing the amount of gas you use, by adding `--max-gas 1000` to the end of these transactions.
+
+- **Deposit:** anyone can deposit at any time; there is no permissioning system. To deposit, simply run:
+
+`aptos move run --function-id $OPENRAILS::shared_stake::deposit --args address:$STAKEPOOL u64:$AMOUNT`
+
+Fill in $AMOUNT with the number of APT coins you want to deposit. Note that for all commands here and below, APT has 8 decimals of precision, so 10000000 = 1 APT, 100000 = 0.001 APT, etc.
+
+- **Unlock:** -
+
+`aptos move run --function-id $OPENRAILS::shared_stake::unlock --args address:$STAKEPOOL u64:$AMOUNT`
+
+- **Cancel Unlock:** -
+
+- `aptos move run --function-id $OPENRAILS::shared_stake::cancel_unlock --args address:$STAKEPOOL u64:$AMOUNT`
+
+- **Withdraw:** -
+
+- `aptos move run --function-id $OPENRAILS::shared_stake::withdraw --args address:$STAKEPOOL u64:$AMOUNT`
+
 ### What This is
 
 This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make compsability easier.
@@ -81,20 +125,16 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 - run `aptos move compile --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c` or whatever your authentication key was that was generated above
 - similarly, you can do `aptos move publish --named-addresses openrails=0xa413044c01d22ce1c821e11e3a9f825da6f839ca4beb1937e960555cde8bb56c`
 
-### CLI Commands
-
-- Only to be called by the stake pool: `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake_pool::initialize`
-- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake::deposit --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200`
-- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake::unlock --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200`
-- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake::cancel_unlock --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200`
-- `aptos move run --function-id 0xbec1cf784c7b93744687fe7899f7aeafe6fc9a7fc9c758f3f933ec9cf1668f70::shared_stake::withdraw --args address:0x6057d69013e3c00ca1e12b1526fa28f3265072cb88b67e7dafc59394ce865e0a u64:200`
-
 ### Gas Cost Benchmarks
 
-- publish the module: 2,199
-- initialize a stake pool: 168
-- deposit into stake pool: 157
-- turn the crank: ???
+- publish the module: 5,551
+- initialize a stake pool: 572
+- deposit into stake pool: 532
+- unlock: 398
+- cancel unlock: 447
+- withdraw: 690
+- turn the crank (skip): 167
+- turn the crank (full): ???
 
 ### TO DO
 
