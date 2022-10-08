@@ -52,9 +52,13 @@ Fill in $AMOUNT with the number of APT coins you want to deposit. Note that for 
 
 ### What This is
 
+<<<<<<< HEAD
 This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make composability easier. This is built for staking protocols (liquid staking, derivative stake tokens) to be built on top of.
 
 It's best if this module is eventually merged into the aptos-core, and replaces the stake module.
+=======
+This module is intended to be the standard for all validator-operators and stakers on Aptos. Having a single Shared Stake Pool module will make composability easier. Stake-router (derivative staking, liquid staking) can be built on top of this.
+>>>>>>> master
 
 ### Why We Made This:
 
