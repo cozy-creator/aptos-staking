@@ -1,4 +1,4 @@
-![Stake Router](./static/stake_router_octopie_small.png 'Stake Router')
+![Stake Router](./static/stake_router_octopie_small2.png 'Stake Router')
 
 ## Shared Stake Pool by OpenRails
 
