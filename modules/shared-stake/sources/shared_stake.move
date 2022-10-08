@@ -7,12 +7,12 @@ module openrails::shared_stake {
     use std::vector;
     use std::error;
     use std::option::{Self, Option};
-    use aptos_std::simple_map::{Self, SimpleMap};
     use aptos_framework::coin::{Self, Coin};
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_framework::stake;
     use aptos_framework::reconfiguration;
     use aptos_framework::timestamp;
+    use openrails::iterable_map::{Self, IterableMap};
 
     const MAX_VECTOR: u64 = 65536;
     // Seconds per month, assuming 1 month = 30 days
@@ -39,8 +39,8 @@ module openrails::shared_stake {
 
     struct SharedStakePool has key {
         owner_cap: stake::OwnerCapability,
-        pending_inactive_shares: IterableMap,
-        inactive_coins: IterableMap,
+        pending_inactive_shares: IterableMap<address, u64>,
+        inactive_coins: IterableMap<address, u64>,
         balances: Balances,
         share_to_unlock_next_epoch: u64,
         operator_agreement: OperatorAgreement,
@@ -66,12 +66,7 @@ module openrails::shared_stake {
     }
 
     struct ShareChest has key {
-        inner: vector<Share>
-    }
-
-    struct IterableMap has store, drop {
-        map: SimpleMap<address, u64>,
-        list: vector<address>
+        inner: IterableMap<address, Share>
     }
 
     // These balances are cached versions of the same coin values in stake::StakePool
@@ -111,14 +106,8 @@ module openrails::shared_stake {
 
         move_to(this, SharedStakePool {
             owner_cap,
-            pending_inactive_shares: IterableMap {
-                map: simple_map::create<address, u64>(),
-                list: vector::empty<address>()
-            },
-            inactive_coins: IterableMap {
-                map: simple_map::create<address, u64>(),
-                list: vector::empty<address>()
-            },
+            pending_inactive_shares: iterable_map::empty<address, u64>(),
+            inactive_coins: iterable_map::empty<address, u64>(),
             balances: Balances {
                 active: 0,
                 pending_active: 0,
@@ -159,7 +148,7 @@ module openrails::shared_stake {
 
         let addr = signer::address_of(account);
         if (!exists<ShareChest>(addr)) {
-            move_to(account, ShareChest { inner: vector::empty<Share>() });
+            move_to(account, ShareChest { inner: iterable_map::empty<address, Share>() });
         };
 
         store_share(addr, share);
@@ -243,7 +232,7 @@ module openrails::shared_stake {
         let tvl = borrow_global<TotalValueLocked>(this);
         let share_value = apt_to_share(tvl, coin_value);
         let stake_pool = borrow_global_mut<SharedStakePool>(this);
-        let pending_inactive_share_value = *simple_map::borrow(&stake_pool.pending_inactive_shares.map, &addr);
+        let pending_inactive_share_value = *iterable_map::borrow(&stake_pool.pending_inactive_shares, &addr);
 
         assert!(share_value <= pending_inactive_share_value, error::invalid_argument(EINSUFFICIENT_BALANCE));
 
@@ -280,8 +269,8 @@ module openrails::shared_stake {
         if (stake_pool.validator_status == VALIDATOR_STATUS_INACTIVE) {
             // In this case, we can move coins straight from active -> pending_inactive -> inactive -> withdrawn
             if (timestamp::now_seconds() >= epoch_tracker.locked_until_secs) {
-                let inactive_coins_value = if (simple_map::contains_key(&stake_pool.inactive_coins.map, &addr)) {
-                    *simple_map::borrow(&stake_pool.inactive_coins.map, &addr)
+                let inactive_coins_value = if (iterable_map::contains_key(&stake_pool.inactive_coins, &addr)) {
+                    *iterable_map::borrow(&stake_pool.inactive_coins, &addr)
                 }
                 else {
                     0
@@ -306,9 +295,9 @@ module openrails::shared_stake {
             move_pending_inactive_to_inactive(stake_pool, tvl);
         };
 
-        assert!(simple_map::contains_key(&stake_pool.inactive_coins.map, &addr), error::not_found(EACCOUNT_NOT_FOUND));
+        assert!(iterable_map::contains_key(&stake_pool.inactive_coins, &addr), error::not_found(EACCOUNT_NOT_FOUND));
 
-        let withdrawable_balance = simple_map::borrow(&stake_pool.inactive_coins.map, &addr);
+        let withdrawable_balance = iterable_map::borrow(&stake_pool.inactive_coins, &addr);
         // Note: aptos_framework::stake will set amount = withdrawable_balance in this case, however
         // I think this behavior is wrong. If another module asks for 1000 APT but they can only withdraw
         // 500, it's best to give them an error rather than giving them 500.
@@ -361,22 +350,13 @@ module openrails::shared_stake {
         assert!(exists<ShareChest>(user_addr), ENO_SHARE_CHEST_FOUND);
         let share_chest = &mut borrow_global_mut<ShareChest>(user_addr).inner;
 
-        // This ensures that every share in our share chest is from a unique pool address
-        let i = 0;
-        let len = vector::length(share_chest);
-        while (i < len) {
-            let stored_share = vector::borrow_mut<Share>(share_chest, i);
-
-            if (share.addr == stored_share.addr) {
-                stored_share.value = stored_share.value + share.value;
-                let Share { addr: _, value: _ } = share;
-                return
-            };
-
-            i = i + 1;
+        if (iterable_map::contains_key(share_chest, &share.addr)) {
+            let stored_share = iterable_map::borrow_mut(share_chest, &share.addr);
+            let Share { addr: _, value } = share;
+            stored_share.value = stored_share.value + value;
+        } else {
+            iterable_map::add(share_chest, share.addr, share);
         };
-
-        vector::push_back<Share>(share_chest, share);
     }
 
     // coin_value is the number of coins you want to withdraw, not the number of shares
@@ -387,52 +367,59 @@ module openrails::shared_stake {
         let tvl = borrow_global<TotalValueLocked>(pool_addr);
         let share_value = apt_to_share(tvl, coin_value);
 
-        let i = 0;
-        let len = vector::length(share_chest);
-        while (i < len) {
-            let stored_share = vector::borrow_mut<Share>(share_chest, i);
+        assert!(iterable_map::contains_key(share_chest, &pool_addr), ENO_SHARE_FOUND);
 
-            if (pool_addr == stored_share.addr) {
-                assert!(stored_share.value >= share_value, error::invalid_argument(EINSUFFICIENT_BALANCE));
-                stored_share.value = stored_share.value - share_value;
+        let stored_share = iterable_map::borrow_mut(share_chest, &pool_addr);
+        assert!(stored_share.value >= share_value, error::invalid_argument(EINSUFFICIENT_BALANCE));
+        stored_share.value = stored_share.value - share_value;
 
-                if (stored_share.value == 0) {
-                    let old_share = vector::remove<Share>(share_chest, i);
-                    let Share { addr: _, value: _ } = old_share;
-                };
-
-                let share = Share { addr: pool_addr, value: share_value };
-                return share
-            };
-
-            i = i + 1;
+        if (stored_share.value == 0) {
+            let (_, old_share) = iterable_map::remove(share_chest, &pool_addr);
+            let Share { addr: _, value: _ } = old_share;
         };
 
-        assert!(false, error::invalid_argument(ENO_SHARE_FOUND));
-        Share { addr: pool_addr, value: 0 }
+        let share = Share { addr: pool_addr, value: share_value };
+        return share
     }
 
     // Returns a user's staked APT balance in the specified pool address.
     // This includes pending_active and active balances, but NOT pending_inactive or inactive
-    // balances. Remember that share-resources are destroyed when you unlock
+    // balances. Remember that share-resources are destroyed when you unlock, and this is
+    // computed by finding a Share stored in ShareChest
     public fun get_stake_balance(pool_addr: address, user_addr: address): u64 acquires ShareChest, TotalValueLocked {
         if (!exists<ShareChest>(user_addr)) {
             return 0
         };
 
         let share_chest = &borrow_global<ShareChest>(user_addr).inner;
-        let len = vector::length(share_chest);
-        let i = 0;
-        while (i < len) {
-            let stored_share = vector::borrow(share_chest, i);
-            if (stored_share.addr == pool_addr) {
-                return (get_stake_balance_of_share(stored_share))
-            };
 
-            i = i + 1;
+        if (iterable_map::contains_key(share_chest, &pool_addr)) {
+            let stored_share = iterable_map::borrow(share_chest, &pool_addr);
+            return get_stake_balance_of_share(stored_share)
+        } else {
+            return 0
+        }
+    }
+
+    public fun get_stake_balance_total(user_addr: address): u64 acquires ShareChest, TotalValueLocked {
+        if (!exists<ShareChest>(user_addr)) {
+            return 0
         };
 
-        return 0
+        let share_chest = &mut borrow_global_mut<ShareChest>(user_addr).inner;
+        let index = iterable_map::get_index(share_chest);
+        let len = vector::length(index);
+
+        let total_coin = 0;
+        let iter = 0;
+
+        while (iter < len) {
+            let (_pool_addr, stored_share) = iterable_map::next(share_chest, iter);
+            total_coin = total_coin + get_stake_balance_of_share(stored_share);
+            iter = iter + 1;
+        };
+
+        total_coin
     }
 
     public fun get_stake_balance_of_share(share: &Share): u64 acquires TotalValueLocked {
@@ -613,14 +600,14 @@ module openrails::shared_stake {
 
     // crank sub-function. Cannot abort
     fun move_pending_inactive_to_inactive(stake_pool: &mut SharedStakePool, tvl: &mut TotalValueLocked) {
-        let addresses = &stake_pool.pending_inactive_shares.list;
-        let inactive_map = &mut stake_pool.inactive_coins.map;
+        let addresses = iterable_map::get_index(&stake_pool.pending_inactive_shares);
+        let inactive_map = &mut stake_pool.inactive_coins;
 
         let i = 0;
         let len = vector::length(addresses);
         while (i < len) {
             let addr = vector::borrow(addresses, i);
-            let share_value = *simple_map::borrow(&stake_pool.pending_inactive_shares.map, addr);
+            let share_value = *iterable_map::borrow(&stake_pool.pending_inactive_shares, addr);
 
             // inactive stake no longer earns interest, and is considered redeemed
             // convert all pending_inactive shares to inactive coins
@@ -628,19 +615,18 @@ module openrails::shared_stake {
             tvl.coins = tvl.coins - (coin_value as u128);
             tvl.shares = tvl.shares - (share_value as u128);
 
-            if (simple_map::contains_key(inactive_map, addr)) {
-                let inactive_balance = simple_map::borrow_mut(inactive_map, addr);
+            if (iterable_map::contains_key(inactive_map, addr)) {
+                let inactive_balance = iterable_map::borrow_mut(inactive_map, addr);
                 *inactive_balance = *inactive_balance + coin_value;
             }
             else {
-                simple_map::add(inactive_map, *addr, coin_value);
+                iterable_map::add(inactive_map, *addr, coin_value);
             };
 
             i = i + 1;
         };
 
-        stake_pool.pending_inactive_shares.map = simple_map::create<address, u64>();
-        stake_pool.pending_inactive_shares.list = vector::empty<address>();
+        stake_pool.pending_inactive_shares = iterable_map::empty<address, u64>();
         stake_pool.balances.pending_inactive_shares = 0;
     }
 
@@ -732,35 +718,25 @@ module openrails::shared_stake {
 
     // ================= Iterable Map =================
 
-    fun add_to_iterable_map(iterable_map: &mut IterableMap, addr: address, amount: u64) {
-        let map = &mut iterable_map.map;
-
-        if (simple_map::contains_key(map, &addr)) {
-            let balance = simple_map::borrow_mut(map, &addr);
+    fun add_to_iterable_map(map: &mut IterableMap<address, u64>, addr: address, amount: u64) {
+        if (iterable_map::contains_key(map, &addr)) {
+            let balance = iterable_map::borrow_mut(map, &addr);
             *balance = *balance + amount;
         }
         else {
-            simple_map::add(map, addr, amount);
-            vector::push_back(&mut iterable_map.list, addr);
+            iterable_map::add(map, addr, amount);
         };
     }
 
-    fun subtract_from_iterable_map(iterable_map: &mut IterableMap, addr: address, amount: u64) {
-        let map = &mut iterable_map.map;
+    fun subtract_from_iterable_map(map: &mut IterableMap<address, u64>, addr: address, amount: u64) {
+        assert!(iterable_map::contains_key(map, &addr), error::invalid_argument(EACCOUNT_NOT_FOUND));
 
-        assert!(simple_map::contains_key(map, &addr), error::invalid_argument(EACCOUNT_NOT_FOUND));
-
-        // TO DO: make sure these balances are really being updated
-        let balance = simple_map::borrow_mut(map, &addr);
+        let balance = iterable_map::borrow_mut(map, &addr);
         assert!(*balance >= amount, error::invalid_argument(EINSUFFICIENT_BALANCE));
         *balance = *balance - amount;
 
         if (*balance == 0) {
-            simple_map::remove(map, &addr);
-            let (exists, i) = vector::index_of(&iterable_map.list, &addr);
-            if (exists) {
-                vector::remove(&mut iterable_map.list, i);
-            }
+            iterable_map::remove(map, &addr);
         };
     }
 
@@ -783,7 +759,7 @@ module openrails::shared_stake {
         assert!(tvl.shares == shares, EINCORRECT_BALANCE);
         assert!(tvl.coins == coins, EINCORRECT_BALANCE);
     }
-    
+
     #[test_only]
     public fun get_balances(pool_addr: address): (u64, u64, u64, u64, u64)
     acquires SharedStakePool, TotalValueLocked {

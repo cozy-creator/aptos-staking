@@ -99,9 +99,8 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 ### TO DO
 
 - Extract iterable map into its own module
-- Rename 'share' to 'StakeShare' and Share.value to StakeShare.share_value (???)
 - Write share chest to be an iterable map
-- Make the apt_to_share function borrow TVL itself rather than being sent it
+- We could add a pending_unlock resource, which you get, instead of keeping a map of all pending_unlock addresses
 - Add full spec file
 - Add 100% unit test coverage
 - consider scenarios where the StakePool is inactive / pending_active, so that it's not part of the current validator set. Make sure everything is consistent
@@ -110,3 +109,12 @@ This module has no direct way to observe reward distributions; in Aptos, on-chai
 - Typescript interfaces for external functions calling in
 - export the shareholder table such that it can be used in governance
 - operators should be able to be paid in stablecoins or other coins if they prefer
+
+### Tests to write
+
+- Make sure the crank is being called in every instance that matters (when tvl changes). Most user-callable functions are tvl-changing events
+- Make sure a user's account is still earning interest when unlocking
+- Test with large numbers of user accounts; thousands of them all unlocking at once. In particular, test the crank with this. My concern is that the crank may become too heavy to turn if large numbers of users are involved.
+- Edge case: when we have to use queued-unlock, which is when a user tries to unlock more than we have in active, but we have a large amount of pending_active available
+- Have the validator join and then leave the validator set. Test deposits, unlocks, cancel-unlocks, and withdrawals afterwards
+- Every function should have its own separate test
