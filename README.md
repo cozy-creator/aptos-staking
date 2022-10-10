@@ -11,7 +11,7 @@ This module is just an initial rough draft; do not use this in mainnet or with a
 We only have CLI commands available at the moment. Please install the Aptos CLI and then use the following commands. First you'll need to specify the address where our module is deployed at:
 
 Devnet address: 0x653edb913f80cc763a29fb63b5418659f830e1dd966ea9c2ebefbdd684b40bee
-Testnet address: (coming soon)
+Testnet address: 0x249f1164aefbacf6c3176b495a77dfa37f5b953634b1f21432801494cdd92016
 Mainnet address: (coming soon)
 
 `export OPENRAILS=<address>`
@@ -49,6 +49,12 @@ Fill in $AMOUNT with the number of APT coins you want to deposit. Note that for 
 - **Withdraw:** withdraws coin from the shared stake pool after it's finished unlocking. In aptos_framework::stake, coins will move from pending_inactive (unlocking) to inactive balance, at which point it can be withdrawn.
 
 `aptos move run --function-id $OPENRAILS::shared_stake::withdraw --args address:$STAKEPOOL u64:$AMOUNT`
+
+- **Set Operator Agreement:** This allows you to set an operator-address and the amount that they should be paid. $OPERATOR is the address of the operator you want to set it to, such as 0xc2c59f2684c6c90068b173bac5331989857409bb3f53f5d83009923bd921be99, $USD is the dollar amount that will be paid to the validator per month (not yet implemented), $BIPS is the basis points that will be paid to the validator, i.e., 900 = 9% of rewards will go to the operator, and $EPOCH is the epoch number you want the agreement to start on (such as the current epoch 691)--note that if the validator is not yet part of the validator set, the epoch number does not matter, otherwise the operator agreement change will be queued until the epoch number. For example, if the current epoch is 700, and you set it to start on epoch 707, and an epoch takes 24 hours currently, then the new agreement will start in about a week.
+
+`aptos move run --function-id $OPENRAILS::shared_stake::set_operator_agreement --args address:$OPERATOR u64:$USD u64:$BIPS u64:$EPOCH --profile whitelist2`
+
+Note that this is only needed if the operator address is gonig to be different than the stake pool address; otherwise you can just leave it as is, but if you're a validator running the stake pool and the operator under the same address, you should call the above function anyway so that you can set your own pay-rate. Otherwise by default you get paid 0 USD and 500 bips (5%).
 
 ### What This is
 
